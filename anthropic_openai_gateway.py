@@ -48,6 +48,7 @@ MODEL_MAP_FILE = Path(os.environ.get("GPT_CC_MODEL_MAP", str(SCRIPT_DIR / "model
 MODEL_CACHE_SECONDS = int(os.environ.get("GPT_CC_MODEL_CACHE_SECONDS", "300"))
 AUTO_MODEL_RESOLUTION = os.environ.get("GPT_CC_AUTO_MODELS", "1").lower() not in {"0", "false", "no"}
 STRICT_UNKNOWN_REQUEST_FIELDS = os.environ.get("GPT_CC_STRICT_UNKNOWN_FIELDS", "1").lower() not in {"0", "false", "no"}
+TOOL_RESULT_CLEARED_PLACEHOLDER = "[tool result cleared by gpt-cc context management]"
 
 _MODEL_CACHE: dict[str, Any] = {"loaded_at": 0.0, "models": []}
 
@@ -192,6 +193,7 @@ def validate_request(body: dict[str, Any]) -> None:
     config = load_model_config()
     request_fields = config.get("request_fields") or {}
     allowed = set(request_fields.get("allowed") or [])
+    ignored = set(request_fields.get("ignored") or [])
     unsupported = set(request_fields.get("unsupported") or [])
 
     present_unsupported = [name for name in unsupported if body.get(name) not in (None, [], {}, "")]
@@ -202,13 +204,229 @@ def validate_request(body: dict[str, Any]) -> None:
         )
 
     if STRICT_UNKNOWN_REQUEST_FIELDS and allowed:
-        unknown = sorted(set(body.keys()) - allowed - unsupported)
+        unknown = sorted(set(body.keys()) - allowed - ignored - unsupported)
         if unknown:
             raise GatewayUnsupportedError(
                 "Claude Code sent unsupported request field(s): "
                 + ", ".join(unknown)
                 + ". Add an explicit mapping in model-map.json before using this feature."
             )
+
+    context_management = body.get("context_management")
+    if isinstance(context_management, dict):
+        edits = context_management.get("edits")
+        if isinstance(edits, list):
+            supported_edits = set((config.get("context_management") or {}).get("supported_edits") or [])
+            for edit in edits:
+                if not isinstance(edit, dict):
+                    continue
+                edit_type = edit.get("type")
+                if edit_type and edit_type not in supported_edits:
+                    raise GatewayUnsupportedError(
+                        f"Claude Code requested context management edit '{edit_type}', but gpt-cc has no local implementation."
+                    )
+
+
+def should_apply_context_edit(edit: dict[str, Any], body: dict[str, Any], tool_use_count: int, default_input_tokens: int | None = None) -> bool:
+    trigger = edit.get("trigger") if isinstance(edit.get("trigger"), dict) else {}
+    trigger_type = trigger.get("type")
+    trigger_value = trigger.get("value")
+
+    if trigger_type == "tool_uses" and isinstance(trigger_value, int):
+        return tool_use_count > trigger_value
+
+    if trigger_type == "input_tokens" and isinstance(trigger_value, int):
+        return estimate_tokens(body) > trigger_value
+
+    if trigger:
+        return False
+
+    if default_input_tokens is None:
+        return True
+    return estimate_tokens(body) > default_input_tokens
+
+
+def context_edit_keep_count(edit: dict[str, Any]) -> int:
+    keep = edit.get("keep") if isinstance(edit.get("keep"), dict) else {}
+    if keep.get("type") == "tool_uses" and isinstance(keep.get("value"), int):
+        return max(0, keep["value"])
+    if isinstance(edit.get("keep"), int):
+        return max(0, edit["keep"])
+    return 4
+
+
+def collect_tool_uses(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
+    ids: list[str] = []
+    for message in messages:
+        if not isinstance(message, dict) or message.get("role") != "assistant":
+            continue
+        for block in content_blocks(message.get("content")):
+            if block.get("type") == "tool_use" and block.get("id"):
+                ids.append({"id": str(block["id"]), "name": str(block.get("name") or "")})
+    return ids
+
+
+def clear_tool_uses(messages: list[dict[str, Any]], clear_ids: set[str], clear_tool_inputs: bool = False) -> tuple[list[dict[str, Any]], int]:
+    cleared = 0
+    out: list[dict[str, Any]] = []
+    cleared_result_ids: set[str] = set()
+
+    for message in messages:
+        if not isinstance(message, dict):
+            out.append(message)
+            continue
+
+        role = message.get("role")
+        blocks = content_blocks(message.get("content"))
+        kept_blocks: list[dict[str, Any]] = []
+
+        if role == "assistant":
+            for block in blocks:
+                if block.get("type") == "tool_use" and str(block.get("id")) in clear_ids:
+                    if clear_tool_inputs:
+                        continue
+                kept_blocks.append(block)
+        elif role == "user":
+            for block in blocks:
+                if block.get("type") == "tool_result":
+                    tool_id = str(block.get("tool_use_id") or block.get("id"))
+                    if tool_id in clear_ids:
+                        cleared_result_ids.add(tool_id)
+                        if clear_tool_inputs:
+                            continue
+                        replacement = dict(block)
+                        replacement["content"] = TOOL_RESULT_CLEARED_PLACEHOLDER
+                        kept_blocks.append(replacement)
+                        continue
+                kept_blocks.append(block)
+        else:
+            kept_blocks = blocks
+
+        if kept_blocks:
+            new_message = dict(message)
+            new_message["content"] = kept_blocks
+            out.append(new_message)
+
+    cleared = len(cleared_result_ids)
+    return out, cleared
+
+
+def thinking_keep_turns(edit: dict[str, Any]) -> int | None:
+    keep = edit.get("keep")
+    if keep == "all":
+        return None
+    if isinstance(keep, dict) and keep.get("type") == "thinking_turns" and isinstance(keep.get("value"), int):
+        return max(0, keep["value"])
+    return 1
+
+
+def clear_thinking_blocks(messages: list[dict[str, Any]], keep_turns: int | None = 1) -> tuple[list[dict[str, Any]], int]:
+    if keep_turns is None:
+        return messages, 0
+
+    assistant_thinking_indexes = [
+        index
+        for index, message in enumerate(messages)
+        if isinstance(message, dict)
+        and message.get("role") == "assistant"
+        and any(block.get("type") == "thinking" for block in content_blocks(message.get("content")))
+    ]
+    preserve_indexes = set(assistant_thinking_indexes[-keep_turns:] if keep_turns else [])
+    cleared = 0
+    out: list[dict[str, Any]] = []
+
+    for index, message in enumerate(messages):
+        if not isinstance(message, dict):
+            out.append(message)
+            continue
+
+        blocks = content_blocks(message.get("content"))
+        kept_blocks = []
+        removed_from_turn = False
+        for block in blocks:
+            if block.get("type") == "thinking" and index not in preserve_indexes:
+                removed_from_turn = True
+                continue
+            kept_blocks.append(block)
+
+        if removed_from_turn:
+            cleared += 1
+
+        if kept_blocks:
+            new_message = dict(message)
+            new_message["content"] = kept_blocks
+            out.append(new_message)
+
+    return out, cleared
+
+
+def apply_context_management(body: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    context_management = body.get("context_management")
+    if not isinstance(context_management, dict):
+        return body, []
+
+    edits = context_management.get("edits")
+    if not isinstance(edits, list):
+        return body, []
+
+    working_body = dict(body)
+    working_messages = list(body.get("messages") or [])
+    applied_edits: list[dict[str, Any]] = []
+
+    for edit in edits:
+        if not isinstance(edit, dict):
+            continue
+
+        edit_type = edit.get("type")
+        before_tokens = estimate_tokens({**working_body, "messages": working_messages})
+
+        if edit_type == "clear_tool_uses_20250919":
+            tool_uses = collect_tool_uses(working_messages)
+            if not should_apply_context_edit(edit, {**working_body, "messages": working_messages}, len(tool_uses), default_input_tokens=100000):
+                continue
+
+            keep_count = context_edit_keep_count(edit)
+            exclude_tools = set(edit.get("exclude_tools") or [])
+            clearable_tool_uses = [tool_use for tool_use in tool_uses if tool_use["name"] not in exclude_tools]
+            clear_tool_inputs = bool(edit.get("clear_tool_inputs"))
+            clear_ids = set(tool_use["id"] for tool_use in (clearable_tool_uses[:-keep_count] if keep_count else clearable_tool_uses))
+            if not clear_ids:
+                continue
+
+            working_messages, cleared = clear_tool_uses(working_messages, clear_ids, clear_tool_inputs=clear_tool_inputs)
+            if cleared:
+                after_tokens = estimate_tokens({**working_body, "messages": working_messages})
+                min_clear = edit.get("clear_at_least") if isinstance(edit.get("clear_at_least"), dict) else {}
+                if min_clear.get("type") == "input_tokens" and isinstance(min_clear.get("value"), int):
+                    if max(0, before_tokens - after_tokens) < min_clear["value"]:
+                        continue
+                applied_edits.append(
+                    {
+                        "type": "clear_tool_uses_20250919",
+                        "cleared_tool_uses": cleared,
+                        "cleared_input_tokens": max(0, before_tokens - after_tokens),
+                    }
+                )
+            continue
+
+        if edit_type == "clear_thinking_20251015":
+            if not should_apply_context_edit(edit, {**working_body, "messages": working_messages}, len(collect_tool_uses(working_messages))):
+                continue
+
+            working_messages, cleared = clear_thinking_blocks(working_messages, keep_turns=thinking_keep_turns(edit))
+            if cleared:
+                after_tokens = estimate_tokens({**working_body, "messages": working_messages})
+                applied_edits.append(
+                    {
+                        "type": "clear_thinking_20251015",
+                        "cleared_thinking_turns": cleared,
+                        "cleared_input_tokens": max(0, before_tokens - after_tokens),
+                    }
+                )
+
+    if applied_edits:
+        working_body["messages"] = working_messages
+    return working_body, applied_edits
 
 
 def as_text(value: Any) -> str:
@@ -302,6 +520,8 @@ def anthropic_messages_to_openai(body: dict[str, Any]) -> list[dict[str, Any]]:
                     if text:
                         text_parts.append(text)
 
+            if not text_parts and not tool_calls:
+                continue
             assistant_message: dict[str, Any] = {"role": "assistant", "content": "\n\n".join(text_parts) or None}
             if tool_calls:
                 assistant_message["tool_calls"] = tool_calls
@@ -461,7 +681,7 @@ def safe_json_loads(text: str) -> Any:
         return {}
 
 
-def openai_response_to_anthropic(data: dict[str, Any], requested_model: str) -> dict[str, Any]:
+def openai_response_to_anthropic(data: dict[str, Any], requested_model: str, applied_edits: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     choice = (data.get("choices") or [{}])[0]
     msg = choice.get("message") or {}
     content = msg.get("content") or ""
@@ -486,7 +706,7 @@ def openai_response_to_anthropic(data: dict[str, Any], requested_model: str) -> 
     if not blocks:
         blocks.append({"type": "text", "text": ""})
 
-    return {
+    response = {
         "id": message_id(),
         "type": "message",
         "role": "assistant",
@@ -501,6 +721,9 @@ def openai_response_to_anthropic(data: dict[str, Any], requested_model: str) -> 
             "output_tokens": usage.get("completion_tokens", 0),
         },
     }
+    if applied_edits:
+        response["context_management"] = {"applied_edits": applied_edits}
+    return response
 
 
 def estimate_tokens(body: dict[str, Any]) -> int:
@@ -598,7 +821,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
 
         if path == "/v1/messages/count_tokens":
-            self._send_json(200, {"input_tokens": estimate_tokens(body)})
+            original_tokens = estimate_tokens(body)
+            managed_body, _ = apply_context_management(body)
+            response = {"input_tokens": estimate_tokens(managed_body)}
+            if isinstance(body.get("context_management"), dict):
+                response["context_management"] = {"original_input_tokens": original_tokens}
+            self._send_json(200, response)
             return
 
         if path != "/v1/messages":
@@ -623,7 +851,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
 
         try:
-            payload = build_openai_payload(body)
+            managed_body, applied_edits = apply_context_management(body)
+            payload = build_openai_payload(managed_body)
         except GatewayUnsupportedError as exc:
             self._send_error(400, str(exc), "unsupported_feature")
             return
@@ -631,15 +860,15 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._send_error(500, str(exc), "configuration_error")
             return
         if payload.get("stream"):
-            self._stream_message(body, payload)
+            self._stream_message(managed_body, payload, applied_edits)
         else:
-            self._complete_message(body, payload)
+            self._complete_message(managed_body, payload, applied_edits)
 
-    def _complete_message(self, body: dict[str, Any], payload: dict[str, Any]) -> None:
+    def _complete_message(self, body: dict[str, Any], payload: dict[str, Any], applied_edits: list[dict[str, Any]]) -> None:
         try:
             with urllib.request.urlopen(upstream_request(payload), timeout=REQUEST_TIMEOUT) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-            self._send_json(200, openai_response_to_anthropic(data, body.get("model") or OPENAI_MODEL))
+            self._send_json(200, openai_response_to_anthropic(data, body.get("model") or OPENAI_MODEL, applied_edits))
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             self._send_error(exc.code, f"Upstream OpenAI-compatible API error: {detail}")
@@ -651,7 +880,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.wfile.write(f"data: {json_dumps(data)}\n\n".encode("utf-8"))
         self.wfile.flush()
 
-    def _stream_message(self, body: dict[str, Any], payload: dict[str, Any]) -> None:
+    def _stream_message(self, body: dict[str, Any], payload: dict[str, Any], applied_edits: list[dict[str, Any]]) -> None:
         try:
             resp = urllib.request.urlopen(upstream_request(payload), timeout=REQUEST_TIMEOUT)
         except urllib.error.HTTPError as exc:
@@ -680,20 +909,21 @@ class GatewayHandler(BaseHTTPRequestHandler):
         tool_blocks: dict[int, dict[str, Any]] = {}
         pending_tool_args: dict[int, str] = {}
 
+        start_message = {
+            "id": msg_id,
+            "type": "message",
+            "role": "assistant",
+            "model": body.get("model") or OPENAI_MODEL,
+            "content": [],
+            "stop_reason": None,
+            "stop_sequence": None,
+            "usage": {"input_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 0},
+        }
         self._sse(
             "message_start",
             {
                 "type": "message_start",
-                "message": {
-                    "id": msg_id,
-                    "type": "message",
-                    "role": "assistant",
-                    "model": body.get("model") or OPENAI_MODEL,
-                    "content": [],
-                    "stop_reason": None,
-                    "stop_sequence": None,
-                    "usage": {"input_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 0},
-                },
+                "message": start_message,
             },
         )
 
@@ -792,13 +1022,17 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 self._sse("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})
                 self._sse("content_block_stop", {"type": "content_block_stop", "index": 0})
 
+            message_delta = {
+                "type": "message_delta",
+                "delta": {"stop_reason": stop_reason, "stop_sequence": None},
+                "usage": {"output_tokens": output_tokens},
+            }
+            if applied_edits:
+                message_delta["context_management"] = {"applied_edits": applied_edits}
+
             self._sse(
                 "message_delta",
-                {
-                    "type": "message_delta",
-                    "delta": {"stop_reason": stop_reason, "stop_sequence": None},
-                    "usage": {"output_tokens": output_tokens},
-                },
+                message_delta,
             )
             self._sse("message_stop", {"type": "message_stop"})
         except Exception:

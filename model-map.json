@@ -118,9 +118,11 @@
       "tools",
       "top_p"
     ],
+    "ignored": [
+      "context_management"
+    ],
     "unsupported": [
       "container",
-      "context_management",
       "mcp_servers",
       "service_tier",
       "thinking"
@@ -130,6 +132,12 @@
     "supported": [
       "custom",
       "function"
+    ]
+  },
+  "context_management": {
+    "supported_edits": [
+      "clear_tool_uses_20250919",
+      "clear_thinking_20251015"
     ]
   }
 }

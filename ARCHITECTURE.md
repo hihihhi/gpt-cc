@@ -68,6 +68,12 @@ explicit mapping is added.
 This is intentional. A silent partial translation is worse than a clear failure
 when the framework has gained a feature the gateway cannot preserve.
 
+The exception is documented context editing. `gpt-cc` applies
+`clear_tool_uses_20250919` and `clear_thinking_20251015` locally before
+forwarding the request to GPT, then reports `context_management.applied_edits`
+in the Anthropic-shaped response. Other context-management edits remain
+unsupported until they have an explicit local implementation.
+
 Set this only while developing a new mapping:
 
 ```powershell
@@ -102,6 +108,6 @@ Some Claude Code features do not have model-endpoint equivalents.
 | --- | --- |
 | Claude in Chrome | Passed through only if Claude Code exposes actions as normal tools. There is no GPT model-endpoint replacement here. |
 | Anthropic server-side tools | Unsupported until a specific mapping is added. |
-| Anthropic thinking blocks | Unsupported. Use GPT reasoning controls through backend-specific env/config when available. |
-| Provider-side prompt caching | Not implemented by this gateway. Claude Code may still send cache metadata; unsupported fields fail closed. |
+| Anthropic thinking blocks | Top-level Anthropic thinking config is unsupported. `context_management.clear_thinking_20251015` can remove historical thinking blocks locally. |
+| Provider-side prompt caching | Not implemented by this gateway. Claude Code may still send cache metadata; unsupported fields fail closed unless explicitly mapped. |
 | New Claude Code betas | Unsupported unless represented in `model-map.json` and gateway translation code. |
