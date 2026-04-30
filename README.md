@@ -1,14 +1,16 @@
 # gpt-cc
 
-`gpt-cc` is a local compatibility gateway for running Claude Code against an
-OpenAI-compatible GPT backend.
+`gpt-cc` is a local compatibility gateway for running Claude Code against GPT
+through either an OpenAI-compatible API backend or a logged-in Codex CLI backend.
 
 Claude Code talks to `gpt-cc` as if it were an Anthropic Messages API gateway.
-`gpt-cc` translates requests to OpenAI Chat Completions, then translates text,
-streaming, and function-tool calls back into Anthropic-style responses.
+`gpt-cc` translates requests to OpenAI Chat Completions when an API backend is
+configured. If no API backend is configured, it can call `codex exec` and adapt
+that structured output back into Anthropic-style responses.
 
 This is not official Anthropic or OpenAI functionality. It does not turn a
-ChatGPT, Codex, or Claude subscription into an API key.
+ChatGPT, Codex, or Claude subscription into an API key; the Codex path shells
+out to your locally logged-in `codex` CLI.
 
 Design goal: Claude Code remains the agent framework. `gpt-cc` is only the
 model-endpoint adapter. See `ARCHITECTURE.md` for the exact boundary.
@@ -21,15 +23,14 @@ Claude Code source or copy router projects such as CC-Switch.
 
 - Python 3.10+
 - Claude Code CLI installed as `claude`
-- Codex CLI installed as `codex` for `gpt-cc login`
-- `OPENAI_API_KEY`, or an `OPENAI_BASE_URL` for an OpenAI-compatible gateway you
-  control
+- Codex CLI installed as `codex` for the no-API-key backend
+- Optional: `OPENAI_API_KEY`, or an `OPENAI_BASE_URL` for an OpenAI-compatible
+  gateway you control
 
 ## Start
 
 ```powershell
 cd C:\Users\heiwa\gpt-cc
-$env:OPENAI_API_KEY = "sk-..."
 .\gpt-cc.ps1 gateway
 ```
 
@@ -44,7 +45,6 @@ macOS/Linux:
 
 ```sh
 cd ~/gpt-cc
-export OPENAI_API_KEY="sk-..."
 ./gpt-cc gateway
 ```
 
@@ -100,15 +100,41 @@ codex login
 ```
 
 That is intentional. `gpt-cc` does not read or reuse private Codex session
-tokens. The gateway still needs `OPENAI_API_KEY`, or an OpenAI-compatible
-`OPENAI_BASE_URL` that handles its own auth.
+tokens. With no `OPENAI_API_KEY` and no `OPENAI_BASE_URL`, gateway auto mode
+uses the logged-in `codex exec` command as the backend.
 
-A Codex subscription/login is not an OpenAI API key and is not a reusable model
-endpoint. `gpt-cc` will not scrape Codex or ChatGPT private session tokens.
+A Codex subscription/login is not an OpenAI API key and is not a reusable HTTP
+model endpoint. `gpt-cc` will not scrape Codex or ChatGPT private session
+tokens.
 
 This follows Claude Code's documented gateway mode: Claude Code can use an
 Anthropic Messages-compatible `ANTHROPIC_BASE_URL`, while
 `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_API_KEY` supplies the request auth header.
+
+## Backends
+
+`GPT_CC_BACKEND` controls provider selection:
+
+| Value | Behavior |
+| --- | --- |
+| `auto` | Default. Use OpenAI-compatible API if `OPENAI_API_KEY` or `OPENAI_BASE_URL` is configured; otherwise use Codex CLI. |
+| `openai` | Force OpenAI-compatible API mode. |
+| `codex` | Force Codex CLI mode. |
+
+API mode is the most faithful path because it is a direct model endpoint. Codex
+CLI mode is for the no-API-key case: it runs `codex exec --ephemeral --sandbox
+read-only --ignore-rules` and asks Codex to return the next Claude Messages
+assistant block as structured JSON. It preserves Claude Code as the outer
+framework, but it is slower and does not provide true token-by-token streaming.
+
+Useful Codex backend overrides:
+
+```powershell
+$env:GPT_CC_BACKEND = "codex"
+$env:GPT_CC_CODEX_MODEL = "gpt-5.4"
+$env:GPT_CC_CODEX_TIMEOUT_SECONDS = "900"
+$env:GPT_CC_CODEX_COMMAND = "codex"
+```
 
 ## Model Routing
 
@@ -150,6 +176,7 @@ fails closed by default:
 - `context_management.edits` is handled locally for documented context edits:
   `clear_tool_uses_20250919` and `clear_thinking_20251015`.
 - `thinking` maps to GPT reasoning controls.
+- `output_config.effort` maps to GPT reasoning controls.
 - `service_tier` maps through `model-map.json`.
 - `container` and `top_k` are accepted as no-op compatibility fields.
 - Known Anthropic-only fields like Messages API `mcp_servers` still return
@@ -196,6 +223,7 @@ Claude-only features:
 | Claude in Chrome | No direct GPT equivalent in this gateway. If Claude Code exposes Chrome actions as normal tools, they pass through; otherwise unsupported. |
 | Claude server-side tools | Unsupported unless you add an explicit mapping. |
 | Top-level Anthropic `thinking` | Mapped to OpenAI `reasoning_effort`; use `OPENAI_REASONING_EFFORT` to force a value or `GPT_CC_REASONING_MODE=off` to disable. |
+| `output_config.effort` | Mapped to OpenAI `reasoning_effort`; `max` maps to `xhigh`. |
 | `context_management.clear_tool_uses_20250919` | Applied locally before forwarding to GPT. Old tool-use/tool-result pairs are pruned while preserving the most recent configured count. |
 | `context_management.clear_thinking_20251015` | Applied locally before forwarding to GPT by removing Anthropic `thinking` content blocks. |
 | MCP servers configured inside Claude Code | Not translated by the gateway. If Claude Code exposes a resulting action as a normal function tool, it may work. |
@@ -216,6 +244,8 @@ $env:OPENAI_API_KEY = "sk-..."
 $env:OPENAI_BASE_URL = "https://api.openai.com/v1"
 $env:OPENAI_REASONING_EFFORT = "high"
 $env:OPENAI_MAX_TOKEN_FIELD = "max_completion_tokens"
+$env:GPT_CC_BACKEND = "auto"
+$env:GPT_CC_CODEX_MODEL = "gpt-5.4"
 $env:GATEWAY_PORT = "8767"
 ```
 

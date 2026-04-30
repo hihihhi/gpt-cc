@@ -17,6 +17,7 @@
 | `system` | Translates to an OpenAI `system` message. |
 | `max_tokens` | Maps to `OPENAI_MAX_TOKEN_FIELD`, default `max_completion_tokens`. |
 | `metadata` | Accepted, not forwarded. |
+| `output_config.effort` | Maps to GPT `reasoning_effort`; `max` maps to `xhigh`. Other `output_config` fields fail closed. |
 | `stop_sequences` | Maps to OpenAI `stop`. |
 | `stream` | Maps streaming SSE in both directions. |
 | `temperature` | Forwarded. |
@@ -29,6 +30,13 @@
 | `service_tier` | Maps Anthropic tiers to OpenAI tiers through `model-map.json`. |
 | `container` | Accepted as no-op. No Chat Completions equivalent; Claude Code still owns local state. |
 | `mcp_servers` | Fails closed for Messages API server-side MCP. Claude Code local MCP should still work through its normal tool loop. |
+
+## Backends
+
+| Backend | Trigger | Strengths | Limits |
+| --- | --- | --- | --- |
+| OpenAI-compatible API | `GPT_CC_BACKEND=openai`, or `auto` with `OPENAI_API_KEY`/`OPENAI_BASE_URL` set | Direct endpoint translation, real API streaming, normal model routing through `/models`. | Requires an API key or compatible gateway. |
+| Codex CLI | `GPT_CC_BACKEND=codex`, or `auto` with no API backend configured | Uses local `codex exec` login/subscription path; keeps Claude Code as the visible framework. | Slower, pseudo-streamed after the Codex call completes, and still constrained by Codex CLI behavior. |
 
 ## Content Blocks
 
@@ -49,7 +57,7 @@ gateway.
 | Capability | Claude Code / Anthropic side | Codex / OpenAI side | gpt-cc decision |
 | --- | --- | --- | --- |
 | Local project instructions | `CLAUDE.md`, settings, hooks, skills/plugins loaded by Claude Code before the API call. | Codex uses its own instructions/config such as `AGENTS.md` and `~/.codex/config.toml`. | Not translated by the gateway. Claude Code still loads its own files normally. |
-| Local tools | Claude Code executes local Bash/Edit/Read/etc. through its own permission system. | Codex executes tools through Codex’s own sandbox/approval model. | Preserved because Claude Code remains the runtime and sends tool schemas/results through Messages. |
+| Local tools | Claude Code executes local Bash/Edit/Read/etc. through its own permission system. | Codex executes tools through Codex's own sandbox/approval model. | Preserved because Claude Code remains the runtime and sends tool schemas/results through Messages. In Codex backend mode, `gpt-cc` runs Codex read-only/ephemeral and instructs it to request Claude Code tools instead of doing local work itself. |
 | Local MCP | `claude mcp ...` configures MCP inside Claude Code. | `codex mcp ...` configures MCP inside Codex. | Preserved only when Claude Code exposes the resulting actions as client tools in the Messages loop. |
 | Messages API `mcp_servers` | Anthropic server connects directly to remote MCP servers from the API request. | OpenAI has MCP/connectors in other product/API surfaces, but not a Chat Completions field equivalent. | Fails closed. Silently dropping it would pretend remote server tools exist. |
 | Server-side Anthropic tools | Examples include Anthropic-managed web/search/code/memory-style tools. The provider runs the tool. | OpenAI has tools such as functions, web search, file search, and computer use, mainly through OpenAI-native APIs/models. | Fails closed unless implemented explicitly. Mapping these would require a tool-execution layer, not just an endpoint adapter. |
@@ -61,6 +69,22 @@ gateway.
 | Images | Anthropic image blocks. | OpenAI Chat Completions image content parts. | Translated. |
 | Documents/files in message payload | Anthropic document blocks and Files API surfaces. | OpenAI has file-capable APIs, but not a drop-in Chat Completions equivalent for every document block. | Placeholder today; future work could add Responses API mode. |
 
+## Codex CLI Backend
+
+Codex backend mode is a compatibility fallback for users who have `codex login`
+but no OpenAI API key. It runs:
+
+```text
+codex exec --ephemeral --ignore-rules --sandbox read-only
+```
+
+The gateway passes Claude Code's Messages request as JSON and asks Codex to
+return either text blocks or tool-use blocks. This keeps Claude Code's
+`CLAUDE.md`, settings, permissions, hooks, local MCP setup, skills, agents, and
+terminal UI in the outer loop. It cannot remove Codex CLI's own internal
+behavior completely, so API mode remains the more faithful backend when an API
+endpoint is available.
+
 ## Thinking Mapping
 
 `thinking` is not forwarded as Anthropic thinking. Instead:
@@ -70,6 +94,8 @@ gateway.
 - `{"type":"enabled","budget_tokens":...}` -> effort chosen by budget/max-token ratio
 - `OPENAI_REASONING_EFFORT` overrides all automatic mapping
 - `GPT_CC_REASONING_MODE=off` disables automatic mapping
+- `output_config.effort` is also mapped; top-level `thinking` remains the
+  fallback when no `output_config.effort` is present.
 
 ## Context Management
 

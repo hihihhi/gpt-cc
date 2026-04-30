@@ -16,8 +16,9 @@ Claude Code still owns:
 `gpt-cc` only owns:
 
 - The local `ANTHROPIC_BASE_URL` endpoint
-- Translation from Anthropic Messages requests to OpenAI Chat Completions
-- Translation from OpenAI text/tool-call responses back to Anthropic Messages
+- Translation from Anthropic Messages requests to an OpenAI-compatible API, or
+  to a structured `codex exec` prompt
+- Translation from GPT text/tool-call responses back to Anthropic Messages
 - Data-driven Claude-model-name to GPT-model-name resolution
 - Fail-closed reporting for features with no GPT equivalent
 
@@ -34,11 +35,11 @@ Claude Code
   v
 gpt-cc gateway
   |
-  | OpenAI-compatible Chat Completions API
-  | POST /chat/completions
-  | GET /models
+  | Backend selected by GPT_CC_BACKEND
   v
-OpenAI-compatible backend
+OpenAI-compatible API backend
+  or
+Codex CLI backend (`codex exec`)
 ```
 
 Claude Code's own prompts, settings, permissions, agents, and tools are not
@@ -99,8 +100,20 @@ Examples:
 ```
 
 `gpt-cc login` deliberately runs `codex login`. It does not scrape or reuse
-Codex credentials. For API calls, configure `OPENAI_API_KEY` or point
-`OPENAI_BASE_URL` at a gateway that handles auth.
+Codex credentials. In `auto` mode, `OPENAI_API_KEY` or `OPENAI_BASE_URL` selects
+the API backend; otherwise `gpt-cc` uses `codex exec`.
+
+Codex CLI backend mode is a fallback for the no-API-key case. It invokes Codex
+as read-only, ephemeral, and with project rules ignored so Claude Code remains
+the outer framework:
+
+```text
+codex exec --ephemeral --ignore-rules --sandbox read-only
+```
+
+This is less faithful than a real API backend because Codex CLI is still an
+agent process, not a raw model endpoint. `gpt-cc` constrains it with a structured
+output schema and converts the result back into Anthropic Messages content.
 
 ## No Direct Equivalents
 

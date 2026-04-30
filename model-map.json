@@ -111,6 +111,7 @@
       "system",
       "max_tokens",
       "metadata",
+      "output_config",
       "service_tier",
       "stop_sequences",
       "stream",

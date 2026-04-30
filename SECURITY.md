@@ -20,6 +20,8 @@ high-level comparison. No code from it is vendored here.
 - Do not commit `OPENAI_API_KEY`, Claude tokens, Codex tokens, ChatGPT cookies,
   browser session cookies, or GitHub tokens.
 - `gpt-cc` reads provider credentials from environment variables at runtime.
+- Codex backend mode uses the `codex` CLI process; it does not parse or export
+  Codex auth files.
 - Logs must not print credential values. The gateway may report whether a key is
   present, but not the key itself.
 

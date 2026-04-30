@@ -37,8 +37,8 @@ function Start-GptCcGateway {
         return
     }
 
-    if (-not `$env:OPENAI_API_KEY -and -not `$env:OPENAI_BASE_URL) {
-        Write-Warning "gpt-cc is starting, but no OPENAI_API_KEY or OPENAI_BASE_URL is set. Codex login/subscription is not an API endpoint, so model calls will fail until you configure a backend."
+    if (-not `$env:OPENAI_API_KEY -and -not `$env:OPENAI_BASE_URL -and -not `$env:GPT_CC_BACKEND) {
+        `$env:GPT_CC_BACKEND = "auto"
     }
 
     `$stdoutLog = Join-Path `$script:GptCcRoot "gpt-cc-gateway.out.log"
@@ -76,8 +76,10 @@ function gpt-cc-status {
     [pscustomobject]@{
         enabled = `$enabled
         gateway = `$gateway
+        backend = if (`$env:GPT_CC_BACKEND) { `$env:GPT_CC_BACKEND } else { "auto" }
         openai_api_key = [bool]`$env:OPENAI_API_KEY
-        openai_base_url = if (`$env:OPENAI_BASE_URL) { `$env:OPENAI_BASE_URL } else { "https://api.openai.com/v1" }
+        openai_base_url = if (`$env:OPENAI_BASE_URL) { `$env:OPENAI_BASE_URL } else { "(unset; auto uses codex backend)" }
+        codex_model = if (`$env:GPT_CC_CODEX_MODEL) { `$env:GPT_CC_CODEX_MODEL } else { "(codex default)" }
         real_claude = `$script:RealClaudeExe
     }
 }

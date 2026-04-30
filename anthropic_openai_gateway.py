@@ -11,8 +11,8 @@ Claude Code normally needs from an LLM gateway:
   POST /v1/messages
   POST /v1/messages/count_tokens
 
-Set OPENAI_API_KEY for the upstream API. Set OPENAI_BASE_URL and OPENAI_MODEL
-to point at a compatible gateway/model.
+Set OPENAI_API_KEY for the upstream API, or leave it unset to use `codex exec`
+through the logged-in Codex CLI backend.
 """
 
 from __future__ import annotations
@@ -20,6 +20,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import time
 import traceback
@@ -28,6 +30,7 @@ import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 from urllib.parse import urlparse
 
@@ -36,6 +39,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 HOST = os.environ.get("GATEWAY_HOST", "127.0.0.1")
 PORT = int(os.environ.get("GATEWAY_PORT", "8767"))
 
+OPENAI_BASE_URL_CONFIGURED = "OPENAI_BASE_URL" in os.environ
 OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "")
@@ -45,10 +49,15 @@ OPENAI_REASONING_EFFORT = os.environ.get("OPENAI_REASONING_EFFORT", "")
 REASONING_MODE = os.environ.get("GPT_CC_REASONING_MODE", "auto").lower()
 MAX_TOKEN_FIELD = os.environ.get("OPENAI_MAX_TOKEN_FIELD", "max_completion_tokens")
 REQUEST_TIMEOUT = int(os.environ.get("OPENAI_TIMEOUT_SECONDS", "600"))
+CODEX_TIMEOUT = int(os.environ.get("GPT_CC_CODEX_TIMEOUT_SECONDS", "600"))
+CODEX_COMMAND = os.environ.get("GPT_CC_CODEX_COMMAND", "codex")
+CODEX_MODEL = os.environ.get("GPT_CC_CODEX_MODEL", "")
+BACKEND_MODE = os.environ.get("GPT_CC_BACKEND", "auto").lower()
 MODEL_MAP_FILE = Path(os.environ.get("GPT_CC_MODEL_MAP", str(SCRIPT_DIR / "model-map.json")))
 MODEL_CACHE_SECONDS = int(os.environ.get("GPT_CC_MODEL_CACHE_SECONDS", "300"))
 AUTO_MODEL_RESOLUTION = os.environ.get("GPT_CC_AUTO_MODELS", "1").lower() not in {"0", "false", "no"}
 STRICT_UNKNOWN_REQUEST_FIELDS = os.environ.get("GPT_CC_STRICT_UNKNOWN_FIELDS", "1").lower() not in {"0", "false", "no"}
+DEBUG_IO = os.environ.get("GPT_CC_DEBUG_IO", "0").lower() in {"1", "true", "yes"}
 TOOL_RESULT_CLEARED_PLACEHOLDER = "[tool result cleared by gpt-cc context management]"
 
 _MODEL_CACHE: dict[str, Any] = {"loaded_at": 0.0, "models": []}
@@ -76,6 +85,19 @@ def call_id() -> str:
 
 def json_dumps(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+
+
+def debug_log(message: str) -> None:
+    if DEBUG_IO:
+        sys.stderr.write(f"gpt-cc debug: {message}\n")
+
+
+def active_backend() -> str:
+    if BACKEND_MODE in {"openai", "codex"}:
+        return BACKEND_MODE
+    if OPENAI_API_KEY or OPENAI_BASE_URL_CONFIGURED:
+        return "openai"
+    return "codex"
 
 
 def load_model_config() -> dict[str, Any]:
@@ -227,12 +249,40 @@ def validate_request(body: dict[str, Any]) -> None:
                         f"Claude Code requested context management edit '{edit_type}', but gpt-cc has no local implementation."
                     )
 
+    output_config = body.get("output_config")
+    if isinstance(output_config, dict):
+        unsupported_output_config = sorted(set(output_config.keys()) - {"effort"})
+        if unsupported_output_config:
+            raise GatewayUnsupportedError(
+                "Claude Code requested output_config field(s) with no configured GPT equivalent: "
+                + ", ".join(unsupported_output_config)
+            )
+
+
+def normalize_reasoning_effort(value: Any) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    lowered = value.lower()
+    if lowered in {"disabled", "none", "off"}:
+        return None
+    if lowered == "max":
+        return "xhigh"
+    if lowered in {"low", "medium", "high", "xhigh"}:
+        return lowered
+    raise GatewayUnsupportedError(f"Claude Code requested reasoning effort '{value}', but gpt-cc has no configured GPT mapping.")
+
 
 def thinking_to_reasoning_effort(body: dict[str, Any]) -> str | None:
     if REASONING_MODE in {"off", "none", "disabled", "drop"}:
         return None
     if OPENAI_REASONING_EFFORT:
         return OPENAI_REASONING_EFFORT
+
+    output_config = body.get("output_config")
+    if isinstance(output_config, dict):
+        output_effort = normalize_reasoning_effort(output_config.get("effort"))
+        if output_effort:
+            return output_effort
 
     thinking = body.get("thinking")
     if not isinstance(thinking, dict):
@@ -804,6 +854,188 @@ def openai_response_to_anthropic(data: dict[str, Any], requested_model: str, app
     return response
 
 
+def codex_prompt(body: dict[str, Any]) -> str:
+    request = {
+        "system": body.get("system"),
+        "messages": body.get("messages") or [],
+        "tools": body.get("tools") or [],
+        "tool_choice": body.get("tool_choice"),
+        "max_tokens": body.get("max_tokens"),
+        "temperature": body.get("temperature"),
+    }
+    return (
+        "You are the model backend for Claude Code. Claude Code, not you, owns filesystem edits, shell execution, "
+        "MCP, permissions, and the user interface. Your job is only to choose the next assistant content.\n\n"
+        "Follow the system and conversation content inside the Claude Messages request. If tools are provided, "
+        "request tool calls instead of describing tool results. If no tool is needed, answer normally.\n\n"
+        "Return ONLY valid JSON matching this shape:\n"
+        "{\n"
+        '  "content": [\n'
+        '    {"type":"text","text":"...","id":null,"name":null,"input_json":null},\n'
+        '    {"type":"tool_use","text":null,"id":null,"name":"tool name from tools","input_json":"{}"}\n'
+        "  ],\n"
+        '  "stop_reason": "end_turn" | "tool_use"\n'
+        "}\n\n"
+        "Use a tool_use block only when the provided tools are necessary. Do not claim to have executed tools. "
+        "For tool_use, put the tool arguments in input_json as a JSON object string. "
+        "Do not inspect files or run commands yourself; Claude Code will do that after you request tools. "
+        "Do not include Markdown fences around the JSON.\n\n"
+        "Claude Messages request JSON:\n"
+        + json.dumps(request, ensure_ascii=False, indent=2)
+    )
+
+
+def codex_response_schema() -> dict[str, Any]:
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "content": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "type": {"type": "string", "enum": ["text", "tool_use"]},
+                        "text": {"type": ["string", "null"]},
+                        "id": {"type": ["string", "null"]},
+                        "name": {"type": ["string", "null"]},
+                        "input_json": {"type": ["string", "null"]},
+                    },
+                    "required": ["type", "text", "id", "name", "input_json"],
+                },
+            },
+            "stop_reason": {"type": "string", "enum": ["end_turn", "tool_use", "max_tokens"]},
+        },
+        "required": ["content", "stop_reason"],
+    }
+
+
+def codex_command_prefix() -> list[str]:
+    resolved = shutil.which(CODEX_COMMAND) or CODEX_COMMAND
+    suffix = Path(resolved).suffix.lower()
+    if suffix == ".ps1":
+        return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", resolved]
+    return [resolved]
+
+
+def run_codex_backend(body: dict[str, Any]) -> dict[str, Any]:
+    with NamedTemporaryFile("w", encoding="utf-8", suffix=".schema.json", delete=False) as schema_file:
+        json.dump(codex_response_schema(), schema_file)
+        schema_path = schema_file.name
+    with NamedTemporaryFile("w", encoding="utf-8", suffix=".out.json", delete=False) as output_file:
+        output_path = output_file.name
+
+    command = codex_command_prefix() + [
+        "exec",
+        "--skip-git-repo-check",
+        "--ephemeral",
+        "--ignore-rules",
+        "--sandbox",
+        "read-only",
+        "--output-schema",
+        schema_path,
+        "--output-last-message",
+        output_path,
+        "--color",
+        "never",
+    ]
+    if CODEX_MODEL:
+        command.extend(["--model", CODEX_MODEL])
+    command.append("-")
+
+    try:
+        proc = subprocess.run(
+            command,
+            input=codex_prompt(body),
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            capture_output=True,
+            timeout=CODEX_TIMEOUT,
+            cwd=os.getcwd(),
+        )
+        if proc.returncode != 0:
+            raise GatewayUnsupportedError(
+                "Codex backend failed. stderr: "
+                + proc.stderr[-2000:]
+                + ("\nstdout: " + proc.stdout[-2000:] if proc.stdout else "")
+            )
+
+        with open(output_path, "r", encoding="utf-8") as fh:
+            raw = fh.read().strip()
+        parsed = safe_json_loads(raw)
+        if not isinstance(parsed, dict):
+            parsed = {"content": [{"type": "text", "text": raw or proc.stdout.strip()}], "stop_reason": "end_turn"}
+        return parsed
+    finally:
+        for path in (schema_path, output_path):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+
+
+def codex_response_to_anthropic(data: dict[str, Any], requested_model: str, applied_edits: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    blocks: list[dict[str, Any]] = []
+    for block in content_blocks(data.get("content")):
+        if block.get("type") == "tool_use":
+            parsed_input = block.get("input") if isinstance(block.get("input"), dict) else None
+            if parsed_input is None and isinstance(block.get("input_json"), str):
+                candidate = safe_json_loads(block["input_json"])
+                parsed_input = candidate if isinstance(candidate, dict) else {}
+            blocks.append(
+                {
+                    "type": "tool_use",
+                    "id": block.get("id") or call_id(),
+                    "name": block.get("name") or "tool",
+                    "input": parsed_input or {},
+                }
+            )
+        elif block.get("type") == "text":
+            blocks.append({"type": "text", "text": as_text(block.get("text"))})
+
+    if not blocks:
+        blocks.append({"type": "text", "text": ""})
+
+    stop_reason = data.get("stop_reason")
+    if stop_reason not in {"end_turn", "tool_use", "max_tokens"}:
+        stop_reason = "tool_use" if any(block.get("type") == "tool_use" for block in blocks) else "end_turn"
+
+    response = {
+        "id": message_id(),
+        "type": "message",
+        "role": "assistant",
+        "model": requested_model,
+        "content": blocks,
+        "stop_reason": stop_reason,
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+            "output_tokens": estimate_tokens({"messages": [{"role": "assistant", "content": blocks}]}),
+        },
+    }
+    if applied_edits:
+        response["context_management"] = {"applied_edits": applied_edits}
+    return response
+
+
+def response_debug_summary(response: dict[str, Any]) -> str:
+    parts = []
+    for block in content_blocks(response.get("content")):
+        block_type = block.get("type")
+        if block_type == "text":
+            preview = as_text(block.get("text")).replace("\n", " ")[:120]
+            parts.append(f"text({len(as_text(block.get('text')))}):{preview!r}")
+        elif block_type == "tool_use":
+            parts.append(f"tool_use:{block.get('name')}")
+        else:
+            parts.append(str(block_type))
+    return f"stop={response.get('stop_reason')} blocks=[{', '.join(parts)}]"
+
+
 def estimate_tokens(body: dict[str, Any]) -> int:
     text = json.dumps(body.get("system", ""), ensure_ascii=False)
     text += json.dumps(body.get("messages", []), ensure_ascii=False)
@@ -830,6 +1062,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _send_error(self, status: int, message: str, error_type: str = "api_error") -> None:
+        if error_type in {"unsupported_feature", "invalid_request_error", "configuration_error", "authentication_error"}:
+            self.log_message("gateway error %s: %s", error_type, message.replace("\n", " ")[:500])
+        elif status >= 500:
+            first_line = message.splitlines()[0] if message else ""
+            self.log_message("gateway error %s: %s", error_type, first_line[:500])
         self._send_json(status, {"type": "error", "error": {"type": error_type, "message": message}})
 
     def _read_json(self) -> dict[str, Any] | None:
@@ -848,6 +1085,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
         self.end_headers()
 
+    def do_HEAD(self) -> None:
+        path = urlparse(self.path).path
+        self.send_response(200 if path in {"/", "/health"} else 404)
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
     def do_GET(self) -> None:
         path = urlparse(self.path).path
         if path == "/health":
@@ -861,6 +1104,7 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 200,
                 {
                     "status": "ok",
+                    "backend": active_backend(),
                     "upstream": OPENAI_BASE_URL,
                     "model": default_resolved_model,
                     "model_override": OPENAI_MODEL or None,
@@ -920,7 +1164,8 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._send_error(500, str(exc), "configuration_error")
             return
 
-        if not OPENAI_API_KEY and not OPENAI_BASE_URL.startswith(("http://127.0.0.1", "http://localhost")):
+        backend = active_backend()
+        if backend == "openai" and not OPENAI_API_KEY and not OPENAI_BASE_URL.startswith(("http://127.0.0.1", "http://localhost")):
             self._send_error(
                 401,
                 "OPENAI_API_KEY is not set. Set it, or point OPENAI_BASE_URL at a local gateway that does not require auth.",
@@ -937,10 +1182,32 @@ class GatewayHandler(BaseHTTPRequestHandler):
         except GatewayConfigError as exc:
             self._send_error(500, str(exc), "configuration_error")
             return
-        if payload.get("stream"):
+
+        if backend == "codex":
+            debug_log(f"request backend=codex stream={bool(payload.get('stream'))} model={body.get('model')}")
+            if payload.get("stream"):
+                self._stream_codex_message(managed_body, applied_edits)
+            else:
+                self._complete_codex_message(managed_body, applied_edits)
+        elif payload.get("stream"):
+            debug_log(f"request backend=openai stream=true model={body.get('model')}")
             self._stream_message(managed_body, payload, applied_edits)
         else:
+            debug_log(f"request backend=openai stream=false model={body.get('model')}")
             self._complete_message(managed_body, payload, applied_edits)
+
+    def _complete_codex_message(self, body: dict[str, Any], applied_edits: list[dict[str, Any]]) -> None:
+        try:
+            data = run_codex_backend(body)
+            response = codex_response_to_anthropic(data, body.get("model") or "codex", applied_edits)
+            debug_log("codex response " + response_debug_summary(response))
+            self._send_json(200, response)
+        except GatewayUnsupportedError as exc:
+            self._send_error(502, str(exc), "codex_backend_error")
+        except subprocess.TimeoutExpired:
+            self._send_error(504, f"Codex backend timed out after {CODEX_TIMEOUT} seconds.", "codex_backend_timeout")
+        except Exception as exc:
+            self._send_error(500, f"Codex backend gateway error: {exc}\n{traceback.format_exc()}")
 
     def _complete_message(self, body: dict[str, Any], payload: dict[str, Any], applied_edits: list[dict[str, Any]]) -> None:
         try:
@@ -957,6 +1224,86 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.wfile.write(f"event: {event}\n".encode("utf-8"))
         self.wfile.write(f"data: {json_dumps(data)}\n\n".encode("utf-8"))
         self.wfile.flush()
+
+    def _stream_codex_message(self, body: dict[str, Any], applied_edits: list[dict[str, Any]]) -> None:
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.end_headers()
+
+        msg_id = message_id()
+        try:
+            data = run_codex_backend(body)
+            response = codex_response_to_anthropic(data, body.get("model") or "codex", applied_edits)
+            debug_log("codex stream response " + response_debug_summary(response))
+            self._sse(
+                "message_start",
+                {
+                    "type": "message_start",
+                    "message": {
+                        "id": msg_id,
+                        "type": "message",
+                        "role": "assistant",
+                        "model": response["model"],
+                        "content": [],
+                        "stop_reason": None,
+                        "stop_sequence": None,
+                        "usage": {"input_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 0},
+                    },
+                },
+            )
+            for index, block in enumerate(response["content"]):
+                if block.get("type") == "tool_use":
+                    self._sse(
+                        "content_block_start",
+                        {
+                            "type": "content_block_start",
+                            "index": index,
+                            "content_block": {
+                                "type": "tool_use",
+                                "id": block.get("id") or call_id(),
+                                "name": block.get("name") or "tool",
+                                "input": {},
+                            },
+                        },
+                    )
+                    input_value = block.get("input") if isinstance(block.get("input"), dict) else {}
+                    if input_value:
+                        self._sse(
+                            "content_block_delta",
+                            {
+                                "type": "content_block_delta",
+                                "index": index,
+                                "delta": {"type": "input_json_delta", "partial_json": json_dumps(input_value)},
+                            },
+                        )
+                else:
+                    self._sse(
+                        "content_block_start",
+                        {"type": "content_block_start", "index": index, "content_block": {"type": "text", "text": ""}},
+                    )
+                    text = as_text(block.get("text"))
+                    if text:
+                        self._sse(
+                            "content_block_delta",
+                            {"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": text}},
+                        )
+                self._sse("content_block_stop", {"type": "content_block_stop", "index": index})
+            message_delta = {
+                "type": "message_delta",
+                "delta": {"stop_reason": response["stop_reason"], "stop_sequence": None},
+                "usage": {"output_tokens": response["usage"]["output_tokens"]},
+            }
+            if applied_edits:
+                message_delta["context_management"] = {"applied_edits": applied_edits}
+            self._sse("message_delta", message_delta)
+            self._sse("message_stop", {"type": "message_stop"})
+        except subprocess.TimeoutExpired:
+            self._sse("error", {"type": "error", "error": {"type": "codex_backend_timeout", "message": f"Codex backend timed out after {CODEX_TIMEOUT} seconds."}})
+        except Exception as exc:
+            self._sse("error", {"type": "error", "error": {"type": "codex_backend_error", "message": f"{exc}\n{traceback.format_exc()}"}})
 
     def _stream_message(self, body: dict[str, Any], payload: dict[str, Any], applied_edits: list[dict[str, Any]]) -> None:
         try:
@@ -1128,8 +1475,15 @@ def main() -> None:
         default_model = resolve_openai_model("claude-sonnet-4-6")
     except Exception as exc:
         default_model = f"unresolved ({exc})"
+    backend = active_backend()
     print(f"anthropic-openai-gateway listening on http://{HOST}:{PORT}", flush=True)
-    print(f"upstream={OPENAI_BASE_URL} default_model={default_model} override={OPENAI_MODEL or '-'} has_openai_api_key={bool(OPENAI_API_KEY)}", flush=True)
+    print(
+        "backend="
+        + backend
+        + f" upstream={OPENAI_BASE_URL} default_model={default_model} override={OPENAI_MODEL or '-'} "
+        + f"has_openai_api_key={bool(OPENAI_API_KEY)} codex_command={CODEX_COMMAND}",
+        flush=True,
+    )
     httpd.serve_forever()
 
 

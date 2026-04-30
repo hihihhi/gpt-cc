@@ -1,5 +1,5 @@
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import anthropic_openai_gateway as gw
 
@@ -122,6 +122,27 @@ class GatewayMappingTests(unittest.TestCase):
             payload = gw.build_openai_payload(body)
         self.assertNotIn("reasoning_effort", payload)
 
+    def test_output_config_effort_maps_to_reasoning_effort(self):
+        body = {
+            "model": "claude-sonnet-4-6",
+            "messages": [{"role": "user", "content": "hi"}],
+            "output_config": {"effort": "max"},
+        }
+        gw.validate_request(body)
+        with patch.object(gw, "OPENAI_MODEL", "gpt-test"):
+            payload = gw.build_openai_payload(body)
+        self.assertEqual(payload["reasoning_effort"], "xhigh")
+
+    def test_output_config_unknown_field_fails_closed(self):
+        with self.assertRaises(gw.GatewayUnsupportedError):
+            gw.validate_request(
+                {
+                    "model": "claude-sonnet-4-6",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    "output_config": {"format": {"type": "json_schema"}},
+                }
+            )
+
     def test_service_tier_maps_to_openai_tier(self):
         body = {
             "model": "claude-sonnet-4-6",
@@ -151,6 +172,48 @@ class GatewayMappingTests(unittest.TestCase):
                 "container": "container_123",
             }
         )
+
+    def test_auto_backend_uses_codex_without_api_config(self):
+        with patch.object(gw, "BACKEND_MODE", "auto"), patch.object(gw, "OPENAI_API_KEY", ""), patch.object(gw, "OPENAI_BASE_URL_CONFIGURED", False):
+            self.assertEqual(gw.active_backend(), "codex")
+
+    def test_auto_backend_uses_openai_with_api_key(self):
+        with patch.object(gw, "BACKEND_MODE", "auto"), patch.object(gw, "OPENAI_API_KEY", "sk-test"), patch.object(gw, "OPENAI_BASE_URL_CONFIGURED", False):
+            self.assertEqual(gw.active_backend(), "openai")
+
+    def test_codex_command_prefix_wraps_powershell_script(self):
+        with patch.object(gw, "CODEX_COMMAND", "C:\\Tools\\codex.ps1"), patch.object(gw.shutil, "which", return_value=None):
+            prefix = gw.codex_command_prefix()
+        self.assertEqual(prefix[:5], ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+
+    def test_codex_backend_parses_structured_output(self):
+        seen_command = []
+
+        def fake_run(command, input, text, capture_output, timeout, cwd, **kwargs):
+            seen_command.extend(command)
+            output_path = command[command.index("--output-last-message") + 1]
+            with open(output_path, "w", encoding="utf-8") as fh:
+                fh.write('{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}')
+            return MagicMock(returncode=0, stderr="", stdout="")
+
+        with patch.object(gw.subprocess, "run", side_effect=fake_run):
+            data = gw.run_codex_backend({"messages": [{"role": "user", "content": "hi"}]})
+        self.assertEqual(data["content"][0]["text"], "ok")
+        self.assertIn("--ephemeral", seen_command)
+        self.assertIn("--ignore-rules", seen_command)
+        self.assertIn("read-only", seen_command)
+
+    def test_codex_response_tool_use_maps_to_anthropic(self):
+        response = gw.codex_response_to_anthropic(
+            {
+                "content": [{"type": "tool_use", "name": "Read", "input_json": "{\"file_path\":\"README.md\"}"}],
+                "stop_reason": "tool_use",
+            },
+            "claude-sonnet-4-6",
+        )
+        self.assertEqual(response["content"][0]["type"], "tool_use")
+        self.assertEqual(response["content"][0]["input"]["file_path"], "README.md")
+        self.assertEqual(response["stop_reason"], "tool_use")
 
     def test_context_management_is_accepted_as_noop(self):
         gw.validate_request(
