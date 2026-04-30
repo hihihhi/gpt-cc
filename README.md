@@ -51,6 +51,32 @@ cd /path/to/repo
 ~/gpt-cc/gpt-cc claude
 ```
 
+## Make `claude` Route Through gpt-cc
+
+PowerShell:
+
+```powershell
+cd C:\Users\heiwa\gpt-cc
+.\install-powershell-wrapper.ps1
+```
+
+Open a new PowerShell window. After that:
+
+```powershell
+claude
+```
+
+routes through `gpt-cc` by default.
+
+Escape hatches:
+
+```powershell
+claude --real     # normal Claude Code binary
+gpt-cc-off        # normal Claude for this shell
+gpt-cc-on         # re-enable gpt-cc for this shell
+gpt-cc-status
+```
+
 One-shot:
 
 ```powershell
@@ -72,6 +98,9 @@ codex login
 That is intentional. `gpt-cc` does not read or reuse private Codex session
 tokens. The gateway still needs `OPENAI_API_KEY`, or an OpenAI-compatible
 `OPENAI_BASE_URL` that handles its own auth.
+
+A Codex subscription/login is not an OpenAI API key and is not a reusable model
+endpoint. `gpt-cc` will not scrape Codex or ChatGPT private session tokens.
 
 This follows Claude Code's documented gateway mode: Claude Code can use an
 Anthropic Messages-compatible `ANTHROPIC_BASE_URL`, while

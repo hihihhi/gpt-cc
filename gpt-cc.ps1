@@ -8,6 +8,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$RealClaude = Join-Path $env:USERPROFILE ".local\bin\claude.exe"
+if (-not (Test-Path $RealClaude)) {
+    $RealClaudeCommand = Get-Command claude.exe -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($RealClaudeCommand) {
+        $RealClaude = $RealClaudeCommand.Source
+    }
+}
 
 function Show-Help {
     @"
@@ -51,11 +58,11 @@ switch ($Command.ToLowerInvariant()) {
     }
     "claude" {
         Set-ClaudeGatewayEnv
-        & claude @Rest
+        & $RealClaude @Rest
     }
     "exec" {
         Set-ClaudeGatewayEnv
-        & claude -p @Rest
+        & $RealClaude -p @Rest
     }
     "login" {
         & codex login @Rest
@@ -69,6 +76,7 @@ switch ($Command.ToLowerInvariant()) {
             claude = Test-Command "claude"
             codex = Test-Command "codex"
             gh = Test-Command "gh"
+            real_claude = $RealClaude
             openai_api_key = [bool]$env:OPENAI_API_KEY
             openai_base_url = if ($env:OPENAI_BASE_URL) { $env:OPENAI_BASE_URL } else { "https://api.openai.com/v1" }
             model_map = if ($env:GPT_CC_MODEL_MAP) { $env:GPT_CC_MODEL_MAP } else { Join-Path $Root "model-map.json" }
