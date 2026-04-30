@@ -1,0 +1,135 @@
+{
+  "version": 1,
+  "default_profile": "coding",
+  "advertised_claude_models": [
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5"
+  ],
+  "explicit_model_map": {},
+  "claude_model_profiles": [
+    {
+      "regex": "opus",
+      "profile": "flagship"
+    },
+    {
+      "regex": "sonnet",
+      "profile": "coding"
+    },
+    {
+      "regex": "haiku",
+      "profile": "mini"
+    }
+  ],
+  "profiles": {
+    "flagship": {
+      "include_regex": [
+        "^gpt-[0-9]+(\\.[0-9]+)*$"
+      ],
+      "exclude_regex": [
+        "mini",
+        "nano",
+        "pro",
+        "realtime",
+        "image",
+        "audio",
+        "transcribe",
+        "embedding",
+        "moderation"
+      ],
+      "prefer_regex": [
+        "^gpt-[0-9]+(\\.[0-9]+)*$"
+      ],
+      "fallback": "gpt-5.5"
+    },
+    "coding": {
+      "include_regex": [
+        "^gpt-[0-9]+(\\.[0-9]+)*$",
+        "^gpt-[0-9]+(\\.[0-9]+)*-codex$"
+      ],
+      "exclude_regex": [
+        "mini",
+        "nano",
+        "pro",
+        "realtime",
+        "image",
+        "audio",
+        "transcribe",
+        "embedding",
+        "moderation"
+      ],
+      "prefer_regex": [
+        "codex",
+        "^gpt-[0-9]+(\\.[0-9]+)*$"
+      ],
+      "fallback": "gpt-5.3-codex"
+    },
+    "mini": {
+      "include_regex": [
+        "^gpt-[0-9]+(\\.[0-9]+)*-mini$",
+        "^gpt-[0-9]+(\\.[0-9]+)*-codex-spark$"
+      ],
+      "exclude_regex": [
+        "nano",
+        "pro",
+        "realtime",
+        "image",
+        "audio",
+        "transcribe",
+        "embedding",
+        "moderation"
+      ],
+      "prefer_regex": [
+        "mini",
+        "codex-spark"
+      ],
+      "fallback": "gpt-5.4-mini"
+    },
+    "nano": {
+      "include_regex": [
+        "^gpt-[0-9]+(\\.[0-9]+)*-nano$"
+      ],
+      "exclude_regex": [
+        "pro",
+        "realtime",
+        "image",
+        "audio",
+        "transcribe",
+        "embedding",
+        "moderation"
+      ],
+      "prefer_regex": [
+        "nano"
+      ],
+      "fallback": "gpt-5.4-nano"
+    }
+  },
+  "request_fields": {
+    "allowed": [
+      "model",
+      "messages",
+      "system",
+      "max_tokens",
+      "metadata",
+      "stop_sequences",
+      "stream",
+      "temperature",
+      "tool_choice",
+      "tools",
+      "top_p"
+    ],
+    "unsupported": [
+      "container",
+      "context_management",
+      "mcp_servers",
+      "service_tier",
+      "thinking"
+    ]
+  },
+  "tool_types": {
+    "supported": [
+      "custom",
+      "function"
+    ]
+  }
+}

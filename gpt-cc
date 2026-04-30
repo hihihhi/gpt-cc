@@ -1,0 +1,72 @@
+#!/usr/bin/env sh
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+COMMAND="${1:-help}"
+if [ "$#" -gt 0 ]; then
+  shift
+fi
+
+set_claude_gateway_env() {
+  : "${GATEWAY_PORT:=8767}"
+  export GATEWAY_PORT
+  export ANTHROPIC_BASE_URL="http://127.0.0.1:${GATEWAY_PORT}"
+  export ANTHROPIC_AUTH_TOKEN="dummy"
+  export ANTHROPIC_API_KEY="dummy"
+}
+
+case "$COMMAND" in
+  gateway)
+    cd "$ROOT"
+    exec python3 ./anthropic_openai_gateway.py
+    ;;
+  claude)
+    set_claude_gateway_env
+    exec claude "$@"
+    ;;
+  exec)
+    set_claude_gateway_env
+    exec claude -p "$@"
+    ;;
+  login)
+    codex login "$@"
+    printf '\n%s\n' "gpt-cc uses OPENAI_API_KEY or OPENAI_BASE_URL for the gateway."
+    printf '%s\n' "Codex login is delegated as requested, but it does not export an OpenAI API key."
+    ;;
+  doctor)
+    command -v python3 >/dev/null 2>&1 && python_ok=true || python_ok=false
+    command -v claude >/dev/null 2>&1 && claude_ok=true || claude_ok=false
+    command -v codex >/dev/null 2>&1 && codex_ok=true || codex_ok=false
+    command -v gh >/dev/null 2>&1 && gh_ok=true || gh_ok=false
+    printf 'python3=%s\nclaude=%s\ncodex=%s\ngh=%s\nopenai_api_key=%s\nopenai_base_url=%s\nmodel_map=%s\n' \
+      "$python_ok" "$claude_ok" "$codex_ok" "$gh_ok" \
+      "$([ -n "${OPENAI_API_KEY:-}" ] && printf true || printf false)" \
+      "${OPENAI_BASE_URL:-https://api.openai.com/v1}" \
+      "${GPT_CC_MODEL_MAP:-$ROOT/model-map.json}"
+    ;;
+  health)
+    : "${GATEWAY_PORT:=8767}"
+    python3 -c "import json, urllib.request; print(json.dumps(json.load(urllib.request.urlopen('http://127.0.0.1:${GATEWAY_PORT}/health')), indent=2))"
+    ;;
+  models)
+    cat "$ROOT/model-map.json"
+    ;;
+  help|--help|-h)
+    cat <<'EOF'
+gpt-cc - run Claude Code against an OpenAI-compatible GPT backend
+
+Usage:
+  ./gpt-cc gateway              Start the local Anthropic-compatible gateway
+  ./gpt-cc claude [args...]     Run claude with ANTHROPIC_BASE_URL pointed at the gateway
+  ./gpt-cc exec "prompt"        Run claude -p through the gateway
+  ./gpt-cc login [args...]      Delegate login to codex login
+  ./gpt-cc doctor               Check local dependencies and environment
+  ./gpt-cc health               Query the running gateway
+  ./gpt-cc models               Show configured model routing
+EOF
+    ;;
+  *)
+    printf '%s\n' "Unknown gpt-cc command '$COMMAND'. Run ./gpt-cc help." >&2
+    exit 2
+    ;;
+esac
