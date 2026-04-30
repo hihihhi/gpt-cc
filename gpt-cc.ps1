@@ -44,7 +44,7 @@ function Set-ClaudeGatewayEnv {
     }
     $env:ANTHROPIC_BASE_URL = "http://127.0.0.1:$env:GATEWAY_PORT"
     $env:ANTHROPIC_AUTH_TOKEN = "dummy"
-    $env:ANTHROPIC_API_KEY = "dummy"
+    Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
 }
 
 function Test-Command($Name) {

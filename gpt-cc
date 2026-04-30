@@ -12,7 +12,7 @@ set_claude_gateway_env() {
   export GATEWAY_PORT
   export ANTHROPIC_BASE_URL="http://127.0.0.1:${GATEWAY_PORT}"
   export ANTHROPIC_AUTH_TOKEN="dummy"
-  export ANTHROPIC_API_KEY="dummy"
+  unset ANTHROPIC_API_KEY
 }
 
 case "$COMMAND" in

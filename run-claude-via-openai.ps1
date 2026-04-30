@@ -11,7 +11,7 @@ if (-not $env:GATEWAY_PORT) {
 
 $env:ANTHROPIC_BASE_URL = "http://127.0.0.1:$env:GATEWAY_PORT"
 $env:ANTHROPIC_AUTH_TOKEN = "dummy"
-$env:ANTHROPIC_API_KEY = "dummy"
+Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
 
 $realClaude = Join-Path $env:USERPROFILE ".local\bin\claude.exe"
 if (-not (Test-Path $realClaude)) {

@@ -164,7 +164,6 @@ environment variables:
 ```powershell
 $env:ANTHROPIC_BASE_URL = "http://127.0.0.1:8767"
 $env:ANTHROPIC_AUTH_TOKEN = "dummy"
-$env:ANTHROPIC_API_KEY = "dummy"
 ```
 
 Command mapping:

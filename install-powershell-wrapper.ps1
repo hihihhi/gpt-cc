@@ -94,6 +94,7 @@ function claude {
     }
 
     Start-GptCcGateway
+    Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
     & (Join-Path `$script:GptCcRoot "gpt-cc.ps1") claude @args
 }
 $markerEnd
