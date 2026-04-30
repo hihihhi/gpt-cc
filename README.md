@@ -12,6 +12,7 @@ ChatGPT, Codex, or Claude subscription into an API key.
 
 Design goal: Claude Code remains the agent framework. `gpt-cc` is only the
 model-endpoint adapter. See `ARCHITECTURE.md` for the exact boundary.
+See `FEATURES.md` for the current Claude-to-GPT compatibility matrix.
 
 Security policy: see `SECURITY.md`. In short, this repo does not vendor leaked
 Claude Code source or copy router projects such as CC-Switch.
@@ -148,8 +149,11 @@ fails closed by default:
 - Unknown request fields return `unsupported_feature`.
 - `context_management.edits` is handled locally for documented context edits:
   `clear_tool_uses_20250919` and `clear_thinking_20251015`.
-- Known Anthropic-only fields like `thinking`, `mcp_servers`, `container`, and
-  `service_tier` return `unsupported_feature`.
+- `thinking` maps to GPT reasoning controls.
+- `service_tier` maps through `model-map.json`.
+- `container` and `top_k` are accepted as no-op compatibility fields.
+- Known Anthropic-only fields like Messages API `mcp_servers` still return
+  `unsupported_feature`.
 - Unknown/server-side Anthropic tool types return `unsupported_feature`.
 
 To allow unknown request fields while developing a new mapping:
@@ -191,7 +195,7 @@ Claude-only features:
 | Claude Code built-in tools | Translated as OpenAI function tools when Claude Code exposes them in the request. |
 | Claude in Chrome | No direct GPT equivalent in this gateway. If Claude Code exposes Chrome actions as normal tools, they pass through; otherwise unsupported. |
 | Claude server-side tools | Unsupported unless you add an explicit mapping. |
-| Anthropic thinking blocks | Unsupported. Use GPT reasoning controls such as `OPENAI_REASONING_EFFORT` when supported by the upstream model. |
+| Top-level Anthropic `thinking` | Mapped to OpenAI `reasoning_effort`; use `OPENAI_REASONING_EFFORT` to force a value or `GPT_CC_REASONING_MODE=off` to disable. |
 | `context_management.clear_tool_uses_20250919` | Applied locally before forwarding to GPT. Old tool-use/tool-result pairs are pruned while preserving the most recent configured count. |
 | `context_management.clear_thinking_20251015` | Applied locally before forwarding to GPT by removing Anthropic `thinking` content blocks. |
 | MCP servers configured inside Claude Code | Not translated by the gateway. If Claude Code exposes a resulting action as a normal function tool, it may work. |

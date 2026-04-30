@@ -111,21 +111,22 @@
       "system",
       "max_tokens",
       "metadata",
+      "service_tier",
       "stop_sequences",
       "stream",
       "temperature",
+      "thinking",
       "tool_choice",
       "tools",
+      "top_k",
       "top_p"
     ],
     "ignored": [
+      "container",
       "context_management"
     ],
     "unsupported": [
-      "container",
-      "mcp_servers",
-      "service_tier",
-      "thinking"
+      "mcp_servers"
     ]
   },
   "tool_types": {
@@ -138,6 +139,38 @@
     "supported_edits": [
       "clear_tool_uses_20250919",
       "clear_thinking_20251015"
+    ]
+  },
+  "thinking": {
+    "mode": "reasoning_effort",
+    "adaptive_effort": "high",
+    "enabled_default_effort": "high",
+    "budget_thresholds": [
+      {
+        "max_ratio": 0.25,
+        "effort": "low"
+      },
+      {
+        "max_ratio": 0.6,
+        "effort": "medium"
+      },
+      {
+        "effort": "high"
+      }
+    ]
+  },
+  "service_tier": {
+    "map": {
+      "auto": "auto",
+      "standard_only": "default",
+      "default": "default",
+      "flex": "flex",
+      "priority": "priority"
+    }
+  },
+  "sampling": {
+    "ignored": [
+      "top_k"
     ]
   }
 }

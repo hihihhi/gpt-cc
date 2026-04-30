@@ -69,15 +69,88 @@ class GatewayMappingTests(unittest.TestCase):
         self.assertEqual(messages[1]["role"], "tool")
         self.assertEqual(messages[1]["tool_call_id"], "toolu_123")
 
-    def test_unsupported_thinking_fails_closed(self):
-        with self.assertRaises(gw.GatewayUnsupportedError):
-            gw.validate_request(
-                {
-                    "model": "claude-sonnet-4-6",
-                    "messages": [{"role": "user", "content": "hi"}],
-                    "thinking": {"type": "enabled", "budget_tokens": 1024},
-                }
-            )
+    def test_image_block_maps_to_openai_image_url(self):
+        messages = gw.anthropic_messages_to_openai(
+            {
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "look"},
+                            {
+                                "type": "image",
+                                "source": {"type": "base64", "media_type": "image/png", "data": "abc123"},
+                            },
+                        ],
+                    }
+                ]
+            }
+        )
+        self.assertEqual(messages[0]["content"][0], {"type": "text", "text": "look"})
+        self.assertEqual(messages[0]["content"][1]["type"], "image_url")
+        self.assertEqual(messages[0]["content"][1]["image_url"]["url"], "data:image/png;base64,abc123")
+
+    def test_thinking_maps_to_reasoning_effort(self):
+        body = {
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 4096,
+            "messages": [{"role": "user", "content": "hi"}],
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+        }
+        gw.validate_request(body)
+        with patch.object(gw, "OPENAI_MODEL", "gpt-test"):
+            payload = gw.build_openai_payload(body)
+        self.assertEqual(payload["reasoning_effort"], "low")
+
+    def test_adaptive_thinking_maps_to_high_reasoning(self):
+        body = {
+            "model": "claude-sonnet-4-6",
+            "messages": [{"role": "user", "content": "hi"}],
+            "thinking": {"type": "adaptive"},
+        }
+        with patch.object(gw, "OPENAI_MODEL", "gpt-test"):
+            payload = gw.build_openai_payload(body)
+        self.assertEqual(payload["reasoning_effort"], "high")
+
+    def test_disabled_thinking_does_not_set_reasoning_effort(self):
+        body = {
+            "model": "claude-sonnet-4-6",
+            "messages": [{"role": "user", "content": "hi"}],
+            "thinking": {"type": "disabled"},
+        }
+        with patch.object(gw, "OPENAI_MODEL", "gpt-test"):
+            payload = gw.build_openai_payload(body)
+        self.assertNotIn("reasoning_effort", payload)
+
+    def test_service_tier_maps_to_openai_tier(self):
+        body = {
+            "model": "claude-sonnet-4-6",
+            "messages": [{"role": "user", "content": "hi"}],
+            "service_tier": "standard_only",
+        }
+        with patch.object(gw, "OPENAI_MODEL", "gpt-test"):
+            payload = gw.build_openai_payload(body)
+        self.assertEqual(payload["service_tier"], "default")
+
+    def test_top_k_is_accepted_as_noop(self):
+        body = {
+            "model": "claude-sonnet-4-6",
+            "messages": [{"role": "user", "content": "hi"}],
+            "top_k": 5,
+        }
+        gw.validate_request(body)
+        with patch.object(gw, "OPENAI_MODEL", "gpt-test"):
+            payload = gw.build_openai_payload(body)
+        self.assertNotIn("top_k", payload)
+
+    def test_container_is_accepted_as_noop(self):
+        gw.validate_request(
+            {
+                "model": "claude-sonnet-4-6",
+                "messages": [{"role": "user", "content": "hi"}],
+                "container": "container_123",
+            }
+        )
 
     def test_context_management_is_accepted_as_noop(self):
         gw.validate_request(

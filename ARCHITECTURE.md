@@ -21,6 +21,8 @@ Claude Code still owns:
 - Data-driven Claude-model-name to GPT-model-name resolution
 - Fail-closed reporting for features with no GPT equivalent
 
+Feature-level compatibility lives in `FEATURES.md`.
+
 ## Request Flow
 
 ```text
@@ -108,6 +110,6 @@ Some Claude Code features do not have model-endpoint equivalents.
 | --- | --- |
 | Claude in Chrome | Passed through only if Claude Code exposes actions as normal tools. There is no GPT model-endpoint replacement here. |
 | Anthropic server-side tools | Unsupported until a specific mapping is added. |
-| Anthropic thinking blocks | Top-level Anthropic thinking config is unsupported. `context_management.clear_thinking_20251015` can remove historical thinking blocks locally. |
+| Anthropic thinking blocks | Top-level Anthropic thinking config maps to GPT reasoning effort. `context_management.clear_thinking_20251015` can remove historical thinking blocks locally. |
 | Provider-side prompt caching | Not implemented by this gateway. Claude Code may still send cache metadata; unsupported fields fail closed unless explicitly mapped. |
 | New Claude Code betas | Unsupported unless represented in `model-map.json` and gateway translation code. |

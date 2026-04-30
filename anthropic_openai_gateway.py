@@ -42,6 +42,7 @@ OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "")
 OPENAI_ORG = os.environ.get("OPENAI_ORG", "")
 OPENAI_PROJECT = os.environ.get("OPENAI_PROJECT", "")
 OPENAI_REASONING_EFFORT = os.environ.get("OPENAI_REASONING_EFFORT", "")
+REASONING_MODE = os.environ.get("GPT_CC_REASONING_MODE", "auto").lower()
 MAX_TOKEN_FIELD = os.environ.get("OPENAI_MAX_TOKEN_FIELD", "max_completion_tokens")
 REQUEST_TIMEOUT = int(os.environ.get("OPENAI_TIMEOUT_SECONDS", "600"))
 MODEL_MAP_FILE = Path(os.environ.get("GPT_CC_MODEL_MAP", str(SCRIPT_DIR / "model-map.json")))
@@ -225,6 +226,55 @@ def validate_request(body: dict[str, Any]) -> None:
                     raise GatewayUnsupportedError(
                         f"Claude Code requested context management edit '{edit_type}', but gpt-cc has no local implementation."
                     )
+
+
+def thinking_to_reasoning_effort(body: dict[str, Any]) -> str | None:
+    if REASONING_MODE in {"off", "none", "disabled", "drop"}:
+        return None
+    if OPENAI_REASONING_EFFORT:
+        return OPENAI_REASONING_EFFORT
+
+    thinking = body.get("thinking")
+    if not isinstance(thinking, dict):
+        return None
+
+    thinking_type = thinking.get("type")
+    if thinking_type in {"disabled", "none"}:
+        return None
+
+    config = load_model_config()
+    thinking_config = config.get("thinking") or {}
+    if thinking_config.get("mode", "reasoning_effort") != "reasoning_effort":
+        return None
+
+    if thinking_type == "adaptive":
+        return str(thinking_config.get("adaptive_effort") or "high")
+
+    budget_tokens = thinking.get("budget_tokens")
+    max_tokens = body.get("max_tokens")
+    if isinstance(budget_tokens, int) and isinstance(max_tokens, int) and max_tokens > 0:
+        ratio = budget_tokens / max_tokens
+        for threshold in thinking_config.get("budget_thresholds") or []:
+            if not isinstance(threshold, dict):
+                continue
+            max_ratio = threshold.get("max_ratio")
+            if max_ratio is None or ratio <= max_ratio:
+                return str(threshold.get("effort") or thinking_config.get("enabled_default_effort") or "high")
+
+    return str(thinking_config.get("enabled_default_effort") or "high")
+
+
+def map_service_tier(service_tier: Any) -> str | None:
+    if not isinstance(service_tier, str) or not service_tier:
+        return None
+    config = load_model_config()
+    service_tier_map = (config.get("service_tier") or {}).get("map") or {}
+    mapped = service_tier_map.get(service_tier)
+    if mapped:
+        return str(mapped)
+    raise GatewayUnsupportedError(
+        f"Claude Code requested service_tier '{service_tier}', but gpt-cc has no configured OpenAI mapping."
+    )
 
 
 def should_apply_context_edit(edit: dict[str, Any], body: dict[str, Any], tool_use_count: int, default_input_tokens: int | None = None) -> bool:
@@ -469,6 +519,29 @@ def block_to_text(block: dict[str, Any]) -> str:
     return as_text(block)
 
 
+def block_to_openai_content_part(block: dict[str, Any]) -> dict[str, Any]:
+    block_type = block.get("type")
+    if block_type == "text":
+        return {"type": "text", "text": as_text(block.get("text"))}
+    if block_type == "image":
+        source = block.get("source") if isinstance(block.get("source"), dict) else {}
+        if source.get("type") == "base64" and source.get("media_type") and source.get("data"):
+            return {
+                "type": "image_url",
+                "image_url": {"url": f"data:{source['media_type']};base64,{source['data']}"},
+            }
+        if source.get("type") == "url" and source.get("url"):
+            return {"type": "image_url", "image_url": {"url": source["url"]}}
+        return {"type": "text", "text": "[image omitted by gateway: unsupported image source]"}
+    return {"type": "text", "text": block_to_text(block)}
+
+
+def openai_user_content(parts: list[dict[str, Any]]) -> Any:
+    if all(part.get("type") == "text" for part in parts):
+        return "\n\n".join(part.get("text", "") for part in parts if part.get("text"))
+    return parts
+
+
 def system_to_text(system: Any) -> str:
     if not system:
         return ""
@@ -529,12 +602,12 @@ def anthropic_messages_to_openai(body: dict[str, Any]) -> list[dict[str, Any]]:
             continue
 
         if role == "user":
-            text_parts: list[str] = []
+            content_parts: list[dict[str, Any]] = []
             for block in blocks:
                 if block.get("type") == "tool_result":
-                    if text_parts:
-                        out.append({"role": "user", "content": "\n\n".join(text_parts)})
-                        text_parts = []
+                    if content_parts:
+                        out.append({"role": "user", "content": openai_user_content(content_parts)})
+                        content_parts = []
                     out.append(
                         {
                             "role": "tool",
@@ -543,11 +616,11 @@ def anthropic_messages_to_openai(body: dict[str, Any]) -> list[dict[str, Any]]:
                         }
                     )
                 else:
-                    text = block_to_text(block)
-                    if text:
-                        text_parts.append(text)
-            if text_parts:
-                out.append({"role": "user", "content": "\n\n".join(text_parts)})
+                    part = block_to_openai_content_part(block)
+                    if part.get("type") != "text" or part.get("text"):
+                        content_parts.append(part)
+            if content_parts:
+                out.append({"role": "user", "content": openai_user_content(content_parts)})
             continue
 
         if role in {"system", "tool"}:
@@ -632,8 +705,13 @@ def build_openai_payload(body: dict[str, Any]) -> dict[str, Any]:
     if body.get("stop_sequences"):
         payload["stop"] = body.get("stop_sequences")
 
-    if OPENAI_REASONING_EFFORT:
-        payload["reasoning_effort"] = OPENAI_REASONING_EFFORT
+    reasoning_effort = thinking_to_reasoning_effort(body)
+    if reasoning_effort:
+        payload["reasoning_effort"] = reasoning_effort
+
+    service_tier = map_service_tier(body.get("service_tier"))
+    if service_tier:
+        payload["service_tier"] = service_tier
 
     tools = anthropic_tools_to_openai(body.get("tools"))
     if tools:
