@@ -1,87 +1,91 @@
-## One sentence
+# gpt-cc
 
-gpt-cc is a compatibility gateway so Claude Code can use OpenAI-compatible models through `gpt-cc` while keeping Claude Code as the outer framework.
+A local Python gateway that presents an Anthropic Messages-compatible endpoint to Claude Code and translates supported requests to either an OpenAI Chat Completions-compatible API or a local Codex CLI invocation.
 
-## Result
+## Status & honesty
 
-No headline result. gpt-cc is not an official Anthropic, OpenAI, or Codex service. It does not convert a ChatGPT, Codex, or Claude subscription into an API key and it does not read or reuse private session tokens.
+**Status:** active compatibility harness. **Result:** No headline performance result; the deliverable is the harness. The current offline suite has 29 unit tests covering request mapping, model selection, tool/message translation, context edits, and boundary cases. This is not official Anthropic, OpenAI, Claude Code, or Codex software; it does not create an API key or reuse private session credentials.
 
-## How it works
+## Architecture
 
-- `GPT_CC_BACKEND` selects `auto`, `openai`, or `codex`.
-- In `auto` mode, `OPENAI_API_KEY` or `OPENAI_BASE_URL` selects API mode.
-- Without API configuration, the gateway uses the local `codex exec` flow.
-- `model-map.json` controls request compatibility; `ARCHITECTURE.md`, `FEATURES.md`, and `SECURITY.md` document the boundaries.
+- Claude Code remains the outer runtime: it owns prompts, settings, permissions, hooks, local MCP configuration, agents, and the tool loop.
+- `gpt-cc` accepts the local Messages-compatible boundary (`POST /v1/messages` and `POST /v1/messages/count_tokens`) and resolves models with `model-map.json` or `OPENAI_MODEL`.
+- API mode translates supported Anthropic message/content blocks, client function tools, streaming SSE, selected reasoning controls, and documented context edits to an OpenAI Chat Completions-compatible endpoint.
+- Codex CLI mode invokes `codex exec --ephemeral --ignore-rules --sandbox read-only`, requests structured output, then maps text or tool-use blocks back to Messages-shaped responses.
+- Unknown request fields, unsupported server-side tools, and unknown context edits fail closed. `top_k` and `container` are no-ops; document blocks become a placeholder; thinking content is not recreated as visible reasoning.
+
+```mermaid
+flowchart LR
+    C[Claude Code] -->|Anthropic Messages-compatible HTTP| G[gpt-cc: local gateway]
+    G -->|OpenAI Chat Completions-compatible HTTP| A[Configured API backend]
+    G -->|codex exec structured output| X[Local Codex CLI]
+    A --> G
+    X --> G
+    G -->|Messages-shaped response| C
+```
 
 ## The interesting decision
 
-The `codex` path is intentionally a CLI adapter (`codex exec`) instead of scraping web sessions or using unofficial HTTP endpoints. This keeps authentication with the installed CLI and preserves the Claude Code boundary; API mode is the direct model-endpoint path, while Codex mode is a non-streaming fallback.
+The gateway is deliberately an endpoint adapter, not a reimplementation of either client runtime. The Codex path delegates authentication to the installed CLI instead of scraping web sessions or using unofficial HTTP endpoints. Features without a reliable Chat Completions equivalent fail closed; two documented context edits are applied locally and reported. The tradeoff is lower apparent compatibility in exchange for avoiding silent tool, state, or context loss. API mode is more faithful than the Codex fallback, whose output is pseudo-streamed only after the command completes.
+
+## Provenance
+
+- Protocol boundary: the public Anthropic Messages API request/response shape, used locally for Claude Code gateway configuration; this repository is not affiliated with Anthropic.
+- API backend boundary: an OpenAI Chat Completions-compatible endpoint and its `/models` discovery endpoint; this repository is not affiliated with OpenAI and does not claim an OpenAI API implementation.
+- CLI fallback boundary: the locally installed `codex` CLI's `codex exec` command. Authentication is delegated to that CLI; this project neither reads nor exports Codex credentials.
+- Compatibility claims are implemented in `anthropic_openai_gateway.py`, configured in `model-map.json`, specified in `FEATURES.md`, and tested in `tests/test_gateway.py`. No external router project code is vendored.
+- **License:** UNKNOWN. No license file or authorship/provenance record establishes that an MIT grant is appropriate, so no license was added.
 
 ## Run it
 
-Requirements: Python 3.10+, Claude Code available as `claude`, plus either OpenAI-compatible API config or `codex` installed.
-
-PowerShell setup and wrapper onboarding:
+Requirements: Python 3.11+, a local `claude` CLI for the wrapper path, and either a configured OpenAI-compatible API backend or a locally authenticated `codex` CLI. Keep credentials in environment variables or a local secret manager; do not put them in this repository.
 
 ```powershell
+# Windows PowerShell: offline validation and local gateway
 cd C:\path\to\gpt-cc
-.\install-powershell-wrapper.ps1
-```
-
-Start a test session:
-
-```powershell
-cd C:\path\to\gpt-cc
+python -m unittest discover -s tests -v
 .\gpt-cc.ps1 doctor
 .\gpt-cc.ps1 gateway
 ```
 
-In another PowerShell window:
+In a second PowerShell window, start Claude Code through the gateway:
 
 ```powershell
-cd C:\path\to\repo
+cd C:\path\to\your-project
 C:\path\to\gpt-cc\gpt-cc.ps1 claude
 ```
 
-Optional command controls:
+Optional wrapper onboarding and controls:
 
 ```powershell
-claude                  # uses gateway if wrapper is enabled
-claude --real           # force real Claude executable
-gpt-cc-off              # disable wrapper for current shell
-gpt-cc-on               # re-enable wrapper for current shell
-gpt-cc-status           # show current wrapper state
-```
-
-Login and explicit backend selection:
-
-```powershell
-.\gpt-cc.ps1 login
-$env:GPT_CC_BACKEND = "codex"
-.\gpt-cc.ps1 gateway
-```
-
-macOS/Linux quick path:
-
-```sh
-cd ~/gpt-cc
-./gpt-cc doctor
-./gpt-cc gateway
-```
-
-Then:
-
-```sh
-cd /path/to/repo
-~/gpt-cc/gpt-cc claude
-```
-
-One-shot command:
-
-```powershell
+cd C:\path\to\gpt-cc
+.\install-powershell-wrapper.ps1
+claude                  # uses the gateway when the wrapper is enabled
+claude --real           # runs the real Claude executable
+gpt-cc-off              # disables the wrapper for this shell
+gpt-cc-on               # re-enables the wrapper for this shell
+gpt-cc-status           # shows wrapper state
 .\gpt-cc.ps1 exec "Inspect this repo and summarize it."
 ```
 
-## Status
+```sh
+# macOS/Linux
+cd /path/to/gpt-cc
+python3 -m unittest discover -s tests -v
+./gpt-cc doctor
+./gpt-cc gateway
 
-Active. Gateway code, wrappers, model routing, and unit tests are in this repo. By default, unknown Anthropic features are blocked (`unsupported_feature`) unless explicitly mapped, and secrets remain environment-driven. Security expectations and allowed operational behavior remain in `SECURITY.md`.
+# In a second shell
+cd /path/to/your-project
+/path/to/gpt-cc/gpt-cc claude
+```
+
+For the direct API path, configure `OPENAI_API_KEY` or `OPENAI_BASE_URL` outside the repository and use `GPT_CC_BACKEND=openai` if needed. For the CLI fallback, run `./gpt-cc.ps1 login` on Windows (or `codex login` on POSIX) and use `GPT_CC_BACKEND=codex` if needed. `auto` uses API mode when API configuration exists and otherwise uses the local Codex CLI path.
+
+## Limitations
+
+- The gateway does not translate Anthropic server-side tools, Messages API `mcp_servers`, provider-side prompt caching, or unimplemented Claude-specific beta fields.
+- Local Claude Code MCP works only when Claude Code exposes the resulting action as a normal client tool; it is not converted into provider-side MCP.
+- Base64/URL images and client tool calls are mapped; document blocks are placeholders. The gateway does not make GPT reasoning tokens visible as Anthropic thinking blocks.
+- Model routing depends on `model-map.json`, an exact `OPENAI_MODEL` override, or the configured backend's `/models` response; an unavailable or incompatible model endpoint can prevent resolution.
+- This project has no measured latency, throughput, accuracy, cost, or benchmark result in the repository. See `FEATURES.md` and `SECURITY.md` for the detailed compatibility and security policies.
