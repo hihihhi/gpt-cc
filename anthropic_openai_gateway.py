@@ -25,22 +25,23 @@ import subprocess
 import sys
 import time
 import traceback
-import uuid
 import urllib.error
 import urllib.request
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
 from urllib.parse import urlparse
 
-
 SCRIPT_DIR = Path(__file__).resolve().parent
 HOST = os.environ.get("GATEWAY_HOST", "127.0.0.1")
 PORT = int(os.environ.get("GATEWAY_PORT", "8767"))
 
 OPENAI_BASE_URL_CONFIGURED = "OPENAI_BASE_URL" in os.environ
-OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip(
+    "/"
+)
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "")
 OPENAI_ORG = os.environ.get("OPENAI_ORG", "")
@@ -53,10 +54,18 @@ CODEX_TIMEOUT = int(os.environ.get("GPT_CC_CODEX_TIMEOUT_SECONDS", "600"))
 CODEX_COMMAND = os.environ.get("GPT_CC_CODEX_COMMAND", "codex")
 CODEX_MODEL = os.environ.get("GPT_CC_CODEX_MODEL", "")
 BACKEND_MODE = os.environ.get("GPT_CC_BACKEND", "auto").lower()
-MODEL_MAP_FILE = Path(os.environ.get("GPT_CC_MODEL_MAP", str(SCRIPT_DIR / "model-map.json")))
+MODEL_MAP_FILE = Path(
+    os.environ.get("GPT_CC_MODEL_MAP", str(SCRIPT_DIR / "model-map.json"))
+)
 MODEL_CACHE_SECONDS = int(os.environ.get("GPT_CC_MODEL_CACHE_SECONDS", "300"))
-AUTO_MODEL_RESOLUTION = os.environ.get("GPT_CC_AUTO_MODELS", "1").lower() not in {"0", "false", "no"}
-STRICT_UNKNOWN_REQUEST_FIELDS = os.environ.get("GPT_CC_STRICT_UNKNOWN_FIELDS", "1").lower() not in {"0", "false", "no"}
+AUTO_MODEL_RESOLUTION = os.environ.get("GPT_CC_AUTO_MODELS", "1").lower() not in {
+    "0",
+    "false",
+    "no",
+}
+STRICT_UNKNOWN_REQUEST_FIELDS = os.environ.get(
+    "GPT_CC_STRICT_UNKNOWN_FIELDS", "1"
+).lower() not in {"0", "false", "no"}
 DEBUG_IO = os.environ.get("GPT_CC_DEBUG_IO", "0").lower() in {"1", "true", "yes"}
 TOOL_RESULT_CLEARED_PLACEHOLDER = "[tool result cleared by gpt-cc context management]"
 
@@ -118,14 +127,18 @@ def openai_models_url() -> str:
 def fetch_openai_models() -> list[dict[str, Any]]:
     if not AUTO_MODEL_RESOLUTION:
         return []
-    if not OPENAI_API_KEY and not OPENAI_BASE_URL.startswith(("http://127.0.0.1", "http://localhost")):
+    if not OPENAI_API_KEY and not OPENAI_BASE_URL.startswith(
+        ("http://127.0.0.1", "http://localhost")
+    ):
         return []
 
     now = time.time()
     if now - float(_MODEL_CACHE["loaded_at"]) < MODEL_CACHE_SECONDS:
         return list(_MODEL_CACHE["models"])
 
-    req = urllib.request.Request(openai_models_url(), headers=upstream_headers(), method="GET")
+    req = urllib.request.Request(
+        openai_models_url(), headers=upstream_headers(), method="GET"
+    )
     try:
         with urllib.request.urlopen(req, timeout=30) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -150,7 +163,9 @@ def model_version_key(model_id: str) -> tuple[int, ...]:
 
 def select_model_for_profile(profile_name: str, config: dict[str, Any]) -> str:
     profiles = config.get("profiles") or {}
-    profile = profiles.get(profile_name) or profiles.get(config.get("default_profile")) or {}
+    profile = (
+        profiles.get(profile_name) or profiles.get(config.get("default_profile")) or {}
+    )
     fallback = profile.get("fallback")
 
     candidates: list[dict[str, Any]] = []
@@ -169,6 +184,7 @@ def select_model_for_profile(profile_name: str, config: dict[str, Any]) -> str:
         candidates.append(model)
 
     if candidates:
+
         def sort_key(model: dict[str, Any]) -> tuple[Any, ...]:
             model_id = model.get("id", "")
             preference = 0
@@ -177,13 +193,20 @@ def select_model_for_profile(profile_name: str, config: dict[str, Any]) -> str:
                     preference = len(prefer_regex) - index
                     break
             alias_bonus = 0 if re.search(r"-\d{4}-\d{2}-\d{2}$", model_id) else 1
-            return (model_version_key(model_id), preference, alias_bonus, int(model.get("created", 0)))
+            return (
+                model_version_key(model_id),
+                preference,
+                alias_bonus,
+                int(model.get("created", 0)),
+            )
 
         return max(candidates, key=sort_key)["id"]
 
     if fallback:
         return str(fallback)
-    raise GatewayUnsupportedError(f"No GPT-equivalent model is configured for profile '{profile_name}'.")
+    raise GatewayUnsupportedError(
+        f"No GPT-equivalent model is configured for profile '{profile_name}'."
+    )
 
 
 def resolve_openai_model(requested_model: str | None) -> str:
@@ -219,7 +242,9 @@ def validate_request(body: dict[str, Any]) -> None:
     ignored = set(request_fields.get("ignored") or [])
     unsupported = set(request_fields.get("unsupported") or [])
 
-    present_unsupported = [name for name in unsupported if body.get(name) not in (None, [], {}, "")]
+    present_unsupported = [
+        name for name in unsupported if body.get(name) not in (None, [], {}, "")
+    ]
     if present_unsupported:
         feature = present_unsupported[0]
         raise GatewayUnsupportedError(
@@ -239,7 +264,9 @@ def validate_request(body: dict[str, Any]) -> None:
     if isinstance(context_management, dict):
         edits = context_management.get("edits")
         if isinstance(edits, list):
-            supported_edits = set((config.get("context_management") or {}).get("supported_edits") or [])
+            supported_edits = set(
+                (config.get("context_management") or {}).get("supported_edits") or []
+            )
             for edit in edits:
                 if not isinstance(edit, dict):
                     continue
@@ -269,7 +296,9 @@ def normalize_reasoning_effort(value: Any) -> str | None:
         return "xhigh"
     if lowered in {"low", "medium", "high", "xhigh"}:
         return lowered
-    raise GatewayUnsupportedError(f"Claude Code requested reasoning effort '{value}', but gpt-cc has no configured GPT mapping.")
+    raise GatewayUnsupportedError(
+        f"Claude Code requested reasoning effort '{value}', but gpt-cc has no configured GPT mapping."
+    )
 
 
 def thinking_to_reasoning_effort(body: dict[str, Any]) -> str | None:
@@ -302,14 +331,22 @@ def thinking_to_reasoning_effort(body: dict[str, Any]) -> str | None:
 
     budget_tokens = thinking.get("budget_tokens")
     max_tokens = body.get("max_tokens")
-    if isinstance(budget_tokens, int) and isinstance(max_tokens, int) and max_tokens > 0:
+    if (
+        isinstance(budget_tokens, int)
+        and isinstance(max_tokens, int)
+        and max_tokens > 0
+    ):
         ratio = budget_tokens / max_tokens
         for threshold in thinking_config.get("budget_thresholds") or []:
             if not isinstance(threshold, dict):
                 continue
             max_ratio = threshold.get("max_ratio")
             if max_ratio is None or ratio <= max_ratio:
-                return str(threshold.get("effort") or thinking_config.get("enabled_default_effort") or "high")
+                return str(
+                    threshold.get("effort")
+                    or thinking_config.get("enabled_default_effort")
+                    or "high"
+                )
 
     return str(thinking_config.get("enabled_default_effort") or "high")
 
@@ -327,8 +364,15 @@ def map_service_tier(service_tier: Any) -> str | None:
     )
 
 
-def should_apply_context_edit(edit: dict[str, Any], body: dict[str, Any], tool_use_count: int, default_input_tokens: int | None = None) -> bool:
-    trigger = edit.get("trigger") if isinstance(edit.get("trigger"), dict) else {}
+def should_apply_context_edit(
+    edit: dict[str, Any],
+    body: dict[str, Any],
+    tool_use_count: int,
+    default_input_tokens: int | None = None,
+) -> bool:
+    trigger: dict[str, Any] = {}
+    if isinstance(edit.get("trigger"), dict):
+        trigger = edit["trigger"]
     trigger_type = trigger.get("type")
     trigger_value = trigger.get("value")
 
@@ -347,7 +391,9 @@ def should_apply_context_edit(edit: dict[str, Any], body: dict[str, Any], tool_u
 
 
 def context_edit_keep_count(edit: dict[str, Any]) -> int:
-    keep = edit.get("keep") if isinstance(edit.get("keep"), dict) else {}
+    keep: dict[str, Any] = {}
+    if isinstance(edit.get("keep"), dict):
+        keep = edit["keep"]
     if keep.get("type") == "tool_uses" and isinstance(keep.get("value"), int):
         return max(0, keep["value"])
     if isinstance(edit.get("keep"), int):
@@ -356,17 +402,21 @@ def context_edit_keep_count(edit: dict[str, Any]) -> int:
 
 
 def collect_tool_uses(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
-    ids: list[str] = []
+    ids: list[dict[str, str]] = []
     for message in messages:
         if not isinstance(message, dict) or message.get("role") != "assistant":
             continue
         for block in content_blocks(message.get("content")):
             if block.get("type") == "tool_use" and block.get("id"):
-                ids.append({"id": str(block["id"]), "name": str(block.get("name") or "")})
+                ids.append(
+                    {"id": str(block["id"]), "name": str(block.get("name") or "")}
+                )
     return ids
 
 
-def clear_tool_uses(messages: list[dict[str, Any]], clear_ids: set[str], clear_tool_inputs: bool = False) -> tuple[list[dict[str, Any]], int]:
+def clear_tool_uses(
+    messages: list[dict[str, Any]], clear_ids: set[str], clear_tool_inputs: bool = False
+) -> tuple[list[dict[str, Any]], int]:
     cleared = 0
     out: list[dict[str, Any]] = []
     cleared_result_ids: set[str] = set()
@@ -382,7 +432,10 @@ def clear_tool_uses(messages: list[dict[str, Any]], clear_ids: set[str], clear_t
 
         if role == "assistant":
             for block in blocks:
-                if block.get("type") == "tool_use" and str(block.get("id")) in clear_ids:
+                if (
+                    block.get("type") == "tool_use"
+                    and str(block.get("id")) in clear_ids
+                ):
                     if clear_tool_inputs:
                         continue
                 kept_blocks.append(block)
@@ -415,12 +468,18 @@ def thinking_keep_turns(edit: dict[str, Any]) -> int | None:
     keep = edit.get("keep")
     if keep == "all":
         return None
-    if isinstance(keep, dict) and keep.get("type") == "thinking_turns" and isinstance(keep.get("value"), int):
+    if (
+        isinstance(keep, dict)
+        and keep.get("type") == "thinking_turns"
+        and isinstance(keep.get("value"), int)
+    ):
         return max(0, keep["value"])
     return 1
 
 
-def clear_thinking_blocks(messages: list[dict[str, Any]], keep_turns: int | None = 1) -> tuple[list[dict[str, Any]], int]:
+def clear_thinking_blocks(
+    messages: list[dict[str, Any]], keep_turns: int | None = 1
+) -> tuple[list[dict[str, Any]], int]:
     if keep_turns is None:
         return messages, 0
 
@@ -429,9 +488,14 @@ def clear_thinking_blocks(messages: list[dict[str, Any]], keep_turns: int | None
         for index, message in enumerate(messages)
         if isinstance(message, dict)
         and message.get("role") == "assistant"
-        and any(block.get("type") == "thinking" for block in content_blocks(message.get("content")))
+        and any(
+            block.get("type") == "thinking"
+            for block in content_blocks(message.get("content"))
+        )
     ]
-    preserve_indexes = set(assistant_thinking_indexes[-keep_turns:] if keep_turns else [])
+    preserve_indexes = set(
+        assistant_thinking_indexes[-keep_turns:] if keep_turns else []
+    )
     cleared = 0
     out: list[dict[str, Any]] = []
 
@@ -460,7 +524,9 @@ def clear_thinking_blocks(messages: list[dict[str, Any]], keep_turns: int | None
     return out, cleared
 
 
-def apply_context_management(body: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def apply_context_management(
+    body: dict[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     context_management = body.get("context_management")
     if not isinstance(context_management, dict):
         return body, []
@@ -482,22 +548,46 @@ def apply_context_management(body: dict[str, Any]) -> tuple[dict[str, Any], list
 
         if edit_type == "clear_tool_uses_20250919":
             tool_uses = collect_tool_uses(working_messages)
-            if not should_apply_context_edit(edit, {**working_body, "messages": working_messages}, len(tool_uses), default_input_tokens=100000):
+            if not should_apply_context_edit(
+                edit,
+                {**working_body, "messages": working_messages},
+                len(tool_uses),
+                default_input_tokens=100000,
+            ):
                 continue
 
             keep_count = context_edit_keep_count(edit)
             exclude_tools = set(edit.get("exclude_tools") or [])
-            clearable_tool_uses = [tool_use for tool_use in tool_uses if tool_use["name"] not in exclude_tools]
+            clearable_tool_uses = [
+                tool_use
+                for tool_use in tool_uses
+                if tool_use["name"] not in exclude_tools
+            ]
             clear_tool_inputs = bool(edit.get("clear_tool_inputs"))
-            clear_ids = set(tool_use["id"] for tool_use in (clearable_tool_uses[:-keep_count] if keep_count else clearable_tool_uses))
+            clear_ids = {
+                tool_use["id"]
+                for tool_use in (
+                    clearable_tool_uses[:-keep_count]
+                    if keep_count
+                    else clearable_tool_uses
+                )
+            }
             if not clear_ids:
                 continue
 
-            working_messages, cleared = clear_tool_uses(working_messages, clear_ids, clear_tool_inputs=clear_tool_inputs)
+            working_messages, cleared = clear_tool_uses(
+                working_messages, clear_ids, clear_tool_inputs=clear_tool_inputs
+            )
             if cleared:
-                after_tokens = estimate_tokens({**working_body, "messages": working_messages})
-                min_clear = edit.get("clear_at_least") if isinstance(edit.get("clear_at_least"), dict) else {}
-                if min_clear.get("type") == "input_tokens" and isinstance(min_clear.get("value"), int):
+                after_tokens = estimate_tokens(
+                    {**working_body, "messages": working_messages}
+                )
+                min_clear: dict[str, Any] = {}
+                if isinstance(edit.get("clear_at_least"), dict):
+                    min_clear = edit["clear_at_least"]
+                if min_clear.get("type") == "input_tokens" and isinstance(
+                    min_clear.get("value"), int
+                ):
                     if max(0, before_tokens - after_tokens) < min_clear["value"]:
                         continue
                 applied_edits.append(
@@ -510,12 +600,20 @@ def apply_context_management(body: dict[str, Any]) -> tuple[dict[str, Any], list
             continue
 
         if edit_type == "clear_thinking_20251015":
-            if not should_apply_context_edit(edit, {**working_body, "messages": working_messages}, len(collect_tool_uses(working_messages))):
+            if not should_apply_context_edit(
+                edit,
+                {**working_body, "messages": working_messages},
+                len(collect_tool_uses(working_messages)),
+            ):
                 continue
 
-            working_messages, cleared = clear_thinking_blocks(working_messages, keep_turns=thinking_keep_turns(edit))
+            working_messages, cleared = clear_thinking_blocks(
+                working_messages, keep_turns=thinking_keep_turns(edit)
+            )
             if cleared:
-                after_tokens = estimate_tokens({**working_body, "messages": working_messages})
+                after_tokens = estimate_tokens(
+                    {**working_body, "messages": working_messages}
+                )
                 applied_edits.append(
                     {
                         "type": "clear_thinking_20251015",
@@ -545,7 +643,12 @@ def content_blocks(content: Any) -> list[dict[str, Any]]:
     if isinstance(content, str):
         return [{"type": "text", "text": content}]
     if isinstance(content, list):
-        return [block if isinstance(block, dict) else {"type": "text", "text": as_text(block)} for block in content]
+        return [
+            block
+            if isinstance(block, dict)
+            else {"type": "text", "text": as_text(block)}
+            for block in content
+        ]
     if isinstance(content, dict):
         return [content]
     return [{"type": "text", "text": as_text(content)}]
@@ -564,7 +667,11 @@ def block_to_text(block: dict[str, Any]) -> str:
     if block_type == "tool_result":
         content = block.get("content")
         if isinstance(content, list):
-            return "\n".join(part for part in (block_to_text(x) for x in content_blocks(content)) if part)
+            return "\n".join(
+                part
+                for part in (block_to_text(x) for x in content_blocks(content))
+                if part
+            )
         return as_text(content)
     return as_text(block)
 
@@ -574,15 +681,26 @@ def block_to_openai_content_part(block: dict[str, Any]) -> dict[str, Any]:
     if block_type == "text":
         return {"type": "text", "text": as_text(block.get("text"))}
     if block_type == "image":
-        source = block.get("source") if isinstance(block.get("source"), dict) else {}
-        if source.get("type") == "base64" and source.get("media_type") and source.get("data"):
+        source: dict[str, Any] = {}
+        if isinstance(block.get("source"), dict):
+            source = block["source"]
+        if (
+            source.get("type") == "base64"
+            and source.get("media_type")
+            and source.get("data")
+        ):
             return {
                 "type": "image_url",
-                "image_url": {"url": f"data:{source['media_type']};base64,{source['data']}"},
+                "image_url": {
+                    "url": f"data:{source['media_type']};base64,{source['data']}"
+                },
             }
         if source.get("type") == "url" and source.get("url"):
             return {"type": "image_url", "image_url": {"url": source["url"]}}
-        return {"type": "text", "text": "[image omitted by gateway: unsupported image source]"}
+        return {
+            "type": "text",
+            "text": "[image omitted by gateway: unsupported image source]",
+        }
     return {"type": "text", "text": block_to_text(block)}
 
 
@@ -601,7 +719,11 @@ def system_to_text(system: Any) -> str:
         parts: list[str] = []
         for block in system:
             if isinstance(block, dict):
-                text = block.get("text") if block.get("type") == "text" else block_to_text(block)
+                text = (
+                    block.get("text")
+                    if block.get("type") == "text"
+                    else block_to_text(block)
+                )
                 if text:
                     parts.append(as_text(text))
             else:
@@ -645,7 +767,10 @@ def anthropic_messages_to_openai(body: dict[str, Any]) -> list[dict[str, Any]]:
 
             if not text_parts and not tool_calls:
                 continue
-            assistant_message: dict[str, Any] = {"role": "assistant", "content": "\n\n".join(text_parts) or None}
+            assistant_message: dict[str, Any] = {
+                "role": "assistant",
+                "content": "\n\n".join(text_parts) or None,
+            }
             if tool_calls:
                 assistant_message["tool_calls"] = tool_calls
             out.append(assistant_message)
@@ -656,12 +781,19 @@ def anthropic_messages_to_openai(body: dict[str, Any]) -> list[dict[str, Any]]:
             for block in blocks:
                 if block.get("type") == "tool_result":
                     if content_parts:
-                        out.append({"role": "user", "content": openai_user_content(content_parts)})
+                        out.append(
+                            {
+                                "role": "user",
+                                "content": openai_user_content(content_parts),
+                            }
+                        )
                         content_parts = []
                     out.append(
                         {
                             "role": "tool",
-                            "tool_call_id": block.get("tool_use_id") or block.get("id") or call_id(),
+                            "tool_call_id": block.get("tool_use_id")
+                            or block.get("id")
+                            or call_id(),
                             "content": block_to_text(block),
                         }
                     )
@@ -670,11 +802,15 @@ def anthropic_messages_to_openai(body: dict[str, Any]) -> list[dict[str, Any]]:
                     if part.get("type") != "text" or part.get("text"):
                         content_parts.append(part)
             if content_parts:
-                out.append({"role": "user", "content": openai_user_content(content_parts)})
+                out.append(
+                    {"role": "user", "content": openai_user_content(content_parts)}
+                )
             continue
 
         if role in {"system", "tool"}:
-            out.append({"role": role, "content": "\n\n".join(block_to_text(b) for b in blocks)})
+            out.append(
+                {"role": role, "content": "\n\n".join(block_to_text(b) for b in blocks)}
+            )
 
     return out
 
@@ -685,7 +821,9 @@ def anthropic_tools_to_openai(tools: Any) -> list[dict[str, Any]]:
         return converted
 
     config = load_model_config()
-    supported_tool_types = set((config.get("tool_types") or {}).get("supported") or ["custom", "function"])
+    supported_tool_types = set(
+        (config.get("tool_types") or {}).get("supported") or ["custom", "function"]
+    )
 
     for tool in tools:
         if not isinstance(tool, dict):
@@ -697,10 +835,18 @@ def anthropic_tools_to_openai(tools: Any) -> list[dict[str, Any]]:
             )
         name = tool.get("name")
         if not name:
-            raise GatewayUnsupportedError("Claude Code sent a tool without a name; cannot map it to an OpenAI function.")
-        parameters = tool.get("input_schema") or tool.get("parameters") or {"type": "object", "properties": {}}
+            raise GatewayUnsupportedError(
+                "Claude Code sent a tool without a name; cannot map it to an OpenAI function."
+            )
+        parameters = (
+            tool.get("input_schema")
+            or tool.get("parameters")
+            or {"type": "object", "properties": {}}
+        )
         if not isinstance(parameters, dict):
-            raise GatewayUnsupportedError(f"Tool '{name}' has a non-object schema; cannot map it to an OpenAI function.")
+            raise GatewayUnsupportedError(
+                f"Tool '{name}' has a non-object schema; cannot map it to an OpenAI function."
+            )
         converted.append(
             {
                 "type": "function",
@@ -789,7 +935,12 @@ def upstream_headers() -> dict[str, str]:
 
 def upstream_request(payload: dict[str, Any]) -> urllib.request.Request:
     url = f"{OPENAI_BASE_URL}/chat/completions"
-    return urllib.request.Request(url, data=json_dumps(payload).encode("utf-8"), headers=upstream_headers(), method="POST")
+    return urllib.request.Request(
+        url,
+        data=json_dumps(payload).encode("utf-8"),
+        headers=upstream_headers(),
+        method="POST",
+    )
 
 
 def map_stop_reason(finish_reason: str | None, has_tool_calls: bool = False) -> str:
@@ -809,7 +960,11 @@ def safe_json_loads(text: str) -> Any:
         return {}
 
 
-def openai_response_to_anthropic(data: dict[str, Any], requested_model: str, applied_edits: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def openai_response_to_anthropic(
+    data: dict[str, Any],
+    requested_model: str,
+    applied_edits: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     choice = (data.get("choices") or [{}])[0]
     msg = choice.get("message") or {}
     content = msg.get("content") or ""
@@ -905,7 +1060,10 @@ def codex_response_schema() -> dict[str, Any]:
                     "required": ["type", "text", "id", "name", "input_json"],
                 },
             },
-            "stop_reason": {"type": "string", "enum": ["end_turn", "tool_use", "max_tokens"]},
+            "stop_reason": {
+                "type": "string",
+                "enum": ["end_turn", "tool_use", "max_tokens"],
+            },
         },
         "required": ["content", "stop_reason"],
     }
@@ -915,15 +1073,26 @@ def codex_command_prefix() -> list[str]:
     resolved = shutil.which(CODEX_COMMAND) or CODEX_COMMAND
     suffix = Path(resolved).suffix.lower()
     if suffix == ".ps1":
-        return ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", resolved]
+        return [
+            "powershell",
+            "-NoProfile",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-File",
+            resolved,
+        ]
     return [resolved]
 
 
 def run_codex_backend(body: dict[str, Any]) -> dict[str, Any]:
-    with NamedTemporaryFile("w", encoding="utf-8", suffix=".schema.json", delete=False) as schema_file:
+    with NamedTemporaryFile(
+        "w", encoding="utf-8", suffix=".schema.json", delete=False
+    ) as schema_file:
         json.dump(codex_response_schema(), schema_file)
         schema_path = schema_file.name
-    with NamedTemporaryFile("w", encoding="utf-8", suffix=".out.json", delete=False) as output_file:
+    with NamedTemporaryFile(
+        "w", encoding="utf-8", suffix=".out.json", delete=False
+    ) as output_file:
         output_path = output_file.name
 
     command = codex_command_prefix() + [
@@ -954,6 +1123,7 @@ def run_codex_backend(body: dict[str, Any]) -> dict[str, Any]:
             capture_output=True,
             timeout=CODEX_TIMEOUT,
             cwd=os.getcwd(),
+            check=False,
         )
         if proc.returncode != 0:
             raise GatewayUnsupportedError(
@@ -962,11 +1132,14 @@ def run_codex_backend(body: dict[str, Any]) -> dict[str, Any]:
                 + ("\nstdout: " + proc.stdout[-2000:] if proc.stdout else "")
             )
 
-        with open(output_path, "r", encoding="utf-8") as fh:
+        with open(output_path, encoding="utf-8") as fh:
             raw = fh.read().strip()
         parsed = safe_json_loads(raw)
         if not isinstance(parsed, dict):
-            parsed = {"content": [{"type": "text", "text": raw or proc.stdout.strip()}], "stop_reason": "end_turn"}
+            parsed = {
+                "content": [{"type": "text", "text": raw or proc.stdout.strip()}],
+                "stop_reason": "end_turn",
+            }
         return parsed
     finally:
         for path in (schema_path, output_path):
@@ -976,11 +1149,17 @@ def run_codex_backend(body: dict[str, Any]) -> dict[str, Any]:
                 pass
 
 
-def codex_response_to_anthropic(data: dict[str, Any], requested_model: str, applied_edits: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def codex_response_to_anthropic(
+    data: dict[str, Any],
+    requested_model: str,
+    applied_edits: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     blocks: list[dict[str, Any]] = []
     for block in content_blocks(data.get("content")):
         if block.get("type") == "tool_use":
-            parsed_input = block.get("input") if isinstance(block.get("input"), dict) else None
+            parsed_input = (
+                block.get("input") if isinstance(block.get("input"), dict) else None
+            )
             if parsed_input is None and isinstance(block.get("input_json"), str):
                 candidate = safe_json_loads(block["input_json"])
                 parsed_input = candidate if isinstance(candidate, dict) else {}
@@ -1000,7 +1179,11 @@ def codex_response_to_anthropic(data: dict[str, Any], requested_model: str, appl
 
     stop_reason = data.get("stop_reason")
     if stop_reason not in {"end_turn", "tool_use", "max_tokens"}:
-        stop_reason = "tool_use" if any(block.get("type") == "tool_use" for block in blocks) else "end_turn"
+        stop_reason = (
+            "tool_use"
+            if any(block.get("type") == "tool_use" for block in blocks)
+            else "end_turn"
+        )
 
     response = {
         "id": message_id(),
@@ -1014,7 +1197,9 @@ def codex_response_to_anthropic(data: dict[str, Any], requested_model: str, appl
             "input_tokens": 0,
             "cache_creation_input_tokens": 0,
             "cache_read_input_tokens": 0,
-            "output_tokens": estimate_tokens({"messages": [{"role": "assistant", "content": blocks}]}),
+            "output_tokens": estimate_tokens(
+                {"messages": [{"role": "assistant", "content": blocks}]}
+            ),
         },
     }
     if applied_edits:
@@ -1046,10 +1231,12 @@ def estimate_tokens(body: dict[str, Any]) -> int:
 class GatewayHandler(BaseHTTPRequestHandler):
     server_version = "anthropic-openai-gateway/0.1"
 
-    def log_message(self, fmt: str, *args: Any) -> None:
-        sys.stderr.write("%s - %s\n" % (self.log_date_time_string(), fmt % args))
+    def log_message(self, format: str, *args: Any) -> None:
+        sys.stderr.write(f"{self.log_date_time_string()} - {format % args}\n")
 
-    def _send_json(self, status: int, data: Any, extra_headers: dict[str, str] | None = None) -> None:
+    def _send_json(
+        self, status: int, data: Any, extra_headers: dict[str, str] | None = None
+    ) -> None:
         body = json_dumps(data).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -1061,13 +1248,24 @@ class GatewayHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_error(self, status: int, message: str, error_type: str = "api_error") -> None:
-        if error_type in {"unsupported_feature", "invalid_request_error", "configuration_error", "authentication_error"}:
-            self.log_message("gateway error %s: %s", error_type, message.replace("\n", " ")[:500])
+    def _send_error(
+        self, status: int, message: str, error_type: str = "api_error"
+    ) -> None:
+        if error_type in {
+            "unsupported_feature",
+            "invalid_request_error",
+            "configuration_error",
+            "authentication_error",
+        }:
+            self.log_message(
+                "gateway error %s: %s", error_type, message.replace("\n", " ")[:500]
+            )
         elif status >= 500:
             first_line = message.splitlines()[0] if message else ""
             self.log_message("gateway error %s: %s", error_type, first_line[:500])
-        self._send_json(status, {"type": "error", "error": {"type": error_type, "message": message}})
+        self._send_json(
+            status, {"type": "error", "error": {"type": error_type, "message": message}}
+        )
 
     def _read_json(self) -> dict[str, Any] | None:
         length = int(self.headers.get("Content-Length", "0"))
@@ -1081,7 +1279,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self) -> None:
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Headers", "authorization,content-type,x-api-key,anthropic-version,anthropic-beta")
+        self.send_header(
+            "Access-Control-Allow-Headers",
+            "authorization,content-type,x-api-key,anthropic-version,anthropic-beta",
+        )
         self.send_header("Access-Control-Allow-Methods", "GET,POST,OPTIONS")
         self.end_headers()
 
@@ -1145,9 +1346,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
         if path == "/v1/messages/count_tokens":
             original_tokens = estimate_tokens(body)
             managed_body, _ = apply_context_management(body)
-            response = {"input_tokens": estimate_tokens(managed_body)}
+            response: dict[str, Any] = {"input_tokens": estimate_tokens(managed_body)}
             if isinstance(body.get("context_management"), dict):
-                response["context_management"] = {"original_input_tokens": original_tokens}
+                response["context_management"] = {
+                    "original_input_tokens": original_tokens
+                }
             self._send_json(200, response)
             return
 
@@ -1165,7 +1368,11 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
 
         backend = active_backend()
-        if backend == "openai" and not OPENAI_API_KEY and not OPENAI_BASE_URL.startswith(("http://127.0.0.1", "http://localhost")):
+        if (
+            backend == "openai"
+            and not OPENAI_API_KEY
+            and not OPENAI_BASE_URL.startswith(("http://127.0.0.1", "http://localhost"))
+        ):
             self._send_error(
                 401,
                 "OPENAI_API_KEY is not set. Set it, or point OPENAI_BASE_URL at a local gateway that does not require auth.",
@@ -1184,7 +1391,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
             return
 
         if backend == "codex":
-            debug_log(f"request backend=codex stream={bool(payload.get('stream'))} model={body.get('model')}")
+            debug_log(
+                f"request backend=codex stream={bool(payload.get('stream'))} model={body.get('model')}"
+            )
             if payload.get("stream"):
                 self._stream_codex_message(managed_body, applied_edits)
             else:
@@ -1196,36 +1405,62 @@ class GatewayHandler(BaseHTTPRequestHandler):
             debug_log(f"request backend=openai stream=false model={body.get('model')}")
             self._complete_message(managed_body, payload, applied_edits)
 
-    def _complete_codex_message(self, body: dict[str, Any], applied_edits: list[dict[str, Any]]) -> None:
+    def _complete_codex_message(
+        self, body: dict[str, Any], applied_edits: list[dict[str, Any]]
+    ) -> None:
         try:
             data = run_codex_backend(body)
-            response = codex_response_to_anthropic(data, body.get("model") or "codex", applied_edits)
+            response = codex_response_to_anthropic(
+                data, body.get("model") or "codex", applied_edits
+            )
             debug_log("codex response " + response_debug_summary(response))
             self._send_json(200, response)
         except GatewayUnsupportedError as exc:
             self._send_error(502, str(exc), "codex_backend_error")
         except subprocess.TimeoutExpired:
-            self._send_error(504, f"Codex backend timed out after {CODEX_TIMEOUT} seconds.", "codex_backend_timeout")
+            self._send_error(
+                504,
+                f"Codex backend timed out after {CODEX_TIMEOUT} seconds.",
+                "codex_backend_timeout",
+            )
         except Exception as exc:
-            self._send_error(500, f"Codex backend gateway error: {exc}\n{traceback.format_exc()}")
+            self._send_error(
+                500, f"Codex backend gateway error: {exc}\n{traceback.format_exc()}"
+            )
 
-    def _complete_message(self, body: dict[str, Any], payload: dict[str, Any], applied_edits: list[dict[str, Any]]) -> None:
+    def _complete_message(
+        self,
+        body: dict[str, Any],
+        payload: dict[str, Any],
+        applied_edits: list[dict[str, Any]],
+    ) -> None:
         try:
-            with urllib.request.urlopen(upstream_request(payload), timeout=REQUEST_TIMEOUT) as resp:
+            with urllib.request.urlopen(
+                upstream_request(payload), timeout=REQUEST_TIMEOUT
+            ) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
-            self._send_json(200, openai_response_to_anthropic(data, body.get("model") or OPENAI_MODEL, applied_edits))
+            self._send_json(
+                200,
+                openai_response_to_anthropic(
+                    data, body.get("model") or OPENAI_MODEL, applied_edits
+                ),
+            )
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            self._send_error(exc.code, f"Upstream OpenAI-compatible API error: {detail}")
+            self._send_error(
+                exc.code, f"Upstream OpenAI-compatible API error: {detail}"
+            )
         except Exception as exc:
             self._send_error(500, f"Gateway error: {exc}\n{traceback.format_exc()}")
 
     def _sse(self, event: str, data: dict[str, Any]) -> None:
-        self.wfile.write(f"event: {event}\n".encode("utf-8"))
-        self.wfile.write(f"data: {json_dumps(data)}\n\n".encode("utf-8"))
+        self.wfile.write(f"event: {event}\n".encode())
+        self.wfile.write(f"data: {json_dumps(data)}\n\n".encode())
         self.wfile.flush()
 
-    def _stream_codex_message(self, body: dict[str, Any], applied_edits: list[dict[str, Any]]) -> None:
+    def _stream_codex_message(
+        self, body: dict[str, Any], applied_edits: list[dict[str, Any]]
+    ) -> None:
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
@@ -1236,7 +1471,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
         msg_id = message_id()
         try:
             data = run_codex_backend(body)
-            response = codex_response_to_anthropic(data, body.get("model") or "codex", applied_edits)
+            response = codex_response_to_anthropic(
+                data, body.get("model") or "codex", applied_edits
+            )
             debug_log("codex stream response " + response_debug_summary(response))
             self._sse(
                 "message_start",
@@ -1250,7 +1487,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
                         "content": [],
                         "stop_reason": None,
                         "stop_sequence": None,
-                        "usage": {"input_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 0},
+                        "usage": {
+                            "input_tokens": 0,
+                            "cache_creation_input_tokens": 0,
+                            "cache_read_input_tokens": 0,
+                            "output_tokens": 0,
+                        },
                     },
                 },
             )
@@ -1269,31 +1511,51 @@ class GatewayHandler(BaseHTTPRequestHandler):
                             },
                         },
                     )
-                    input_value = block.get("input") if isinstance(block.get("input"), dict) else {}
+                    input_value = (
+                        block.get("input")
+                        if isinstance(block.get("input"), dict)
+                        else {}
+                    )
                     if input_value:
                         self._sse(
                             "content_block_delta",
                             {
                                 "type": "content_block_delta",
                                 "index": index,
-                                "delta": {"type": "input_json_delta", "partial_json": json_dumps(input_value)},
+                                "delta": {
+                                    "type": "input_json_delta",
+                                    "partial_json": json_dumps(input_value),
+                                },
                             },
                         )
                 else:
                     self._sse(
                         "content_block_start",
-                        {"type": "content_block_start", "index": index, "content_block": {"type": "text", "text": ""}},
+                        {
+                            "type": "content_block_start",
+                            "index": index,
+                            "content_block": {"type": "text", "text": ""},
+                        },
                     )
                     text = as_text(block.get("text"))
                     if text:
                         self._sse(
                             "content_block_delta",
-                            {"type": "content_block_delta", "index": index, "delta": {"type": "text_delta", "text": text}},
+                            {
+                                "type": "content_block_delta",
+                                "index": index,
+                                "delta": {"type": "text_delta", "text": text},
+                            },
                         )
-                self._sse("content_block_stop", {"type": "content_block_stop", "index": index})
+                self._sse(
+                    "content_block_stop", {"type": "content_block_stop", "index": index}
+                )
             message_delta = {
                 "type": "message_delta",
-                "delta": {"stop_reason": response["stop_reason"], "stop_sequence": None},
+                "delta": {
+                    "stop_reason": response["stop_reason"],
+                    "stop_sequence": None,
+                },
                 "usage": {"output_tokens": response["usage"]["output_tokens"]},
             }
             if applied_edits:
@@ -1301,16 +1563,43 @@ class GatewayHandler(BaseHTTPRequestHandler):
             self._sse("message_delta", message_delta)
             self._sse("message_stop", {"type": "message_stop"})
         except subprocess.TimeoutExpired:
-            self._sse("error", {"type": "error", "error": {"type": "codex_backend_timeout", "message": f"Codex backend timed out after {CODEX_TIMEOUT} seconds."}})
+            self._sse(
+                "error",
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "codex_backend_timeout",
+                        "message": f"Codex backend timed out after {CODEX_TIMEOUT} seconds.",
+                    },
+                },
+            )
         except Exception as exc:
-            self._sse("error", {"type": "error", "error": {"type": "codex_backend_error", "message": f"{exc}\n{traceback.format_exc()}"}})
+            self._sse(
+                "error",
+                {
+                    "type": "error",
+                    "error": {
+                        "type": "codex_backend_error",
+                        "message": f"{exc}\n{traceback.format_exc()}",
+                    },
+                },
+            )
 
-    def _stream_message(self, body: dict[str, Any], payload: dict[str, Any], applied_edits: list[dict[str, Any]]) -> None:
+    def _stream_message(
+        self,
+        body: dict[str, Any],
+        payload: dict[str, Any],
+        applied_edits: list[dict[str, Any]],
+    ) -> None:
         try:
-            resp = urllib.request.urlopen(upstream_request(payload), timeout=REQUEST_TIMEOUT)
+            resp = urllib.request.urlopen(
+                upstream_request(payload), timeout=REQUEST_TIMEOUT
+            )
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            self._send_error(exc.code, f"Upstream OpenAI-compatible API error: {detail}")
+            self._send_error(
+                exc.code, f"Upstream OpenAI-compatible API error: {detail}"
+            )
             return
         except Exception as exc:
             self._send_error(500, f"Gateway error opening upstream stream: {exc}")
@@ -1342,7 +1631,12 @@ class GatewayHandler(BaseHTTPRequestHandler):
             "content": [],
             "stop_reason": None,
             "stop_sequence": None,
-            "usage": {"input_tokens": 0, "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 0},
+            "usage": {
+                "input_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0,
+                "output_tokens": 0,
+            },
         }
         self._sse(
             "message_start",
@@ -1369,7 +1663,9 @@ class GatewayHandler(BaseHTTPRequestHandler):
                 for choice in chunk.get("choices") or []:
                     finish_reason = choice.get("finish_reason")
                     if finish_reason:
-                        stop_reason = map_stop_reason(finish_reason, finish_reason == "tool_calls")
+                        stop_reason = map_stop_reason(
+                            finish_reason, finish_reason == "tool_calls"
+                        )
 
                     delta = choice.get("delta") or {}
                     content_delta = delta.get("content")
@@ -1381,11 +1677,19 @@ class GatewayHandler(BaseHTTPRequestHandler):
                             emitted_any_block = True
                             self._sse(
                                 "content_block_start",
-                                {"type": "content_block_start", "index": text_index, "content_block": {"type": "text", "text": ""}},
+                                {
+                                    "type": "content_block_start",
+                                    "index": text_index,
+                                    "content_block": {"type": "text", "text": ""},
+                                },
                             )
                         self._sse(
                             "content_block_delta",
-                            {"type": "content_block_delta", "index": text_index, "delta": {"type": "text_delta", "text": content_delta}},
+                            {
+                                "type": "content_block_delta",
+                                "index": text_index,
+                                "delta": {"type": "text_delta", "text": content_delta},
+                            },
                         )
 
                     for tool_call_delta in delta.get("tool_calls") or []:
@@ -1397,11 +1701,17 @@ class GatewayHandler(BaseHTTPRequestHandler):
                             name = fn.get("name")
                             tool_id = tool_call_delta.get("id")
                             if not name:
-                                pending_tool_args[openai_idx] = pending_tool_args.get(openai_idx, "") + args_delta
+                                pending_tool_args[openai_idx] = (
+                                    pending_tool_args.get(openai_idx, "") + args_delta
+                                )
                                 continue
                             content_index = next_index
                             next_index += 1
-                            tool_blocks[openai_idx] = {"index": content_index, "id": tool_id or call_id(), "name": name}
+                            tool_blocks[openai_idx] = {
+                                "index": content_index,
+                                "id": tool_id or call_id(),
+                                "name": name,
+                            }
                             emitted_any_block = True
                             self._sse(
                                 "content_block_start",
@@ -1423,7 +1733,10 @@ class GatewayHandler(BaseHTTPRequestHandler):
                                     {
                                         "type": "content_block_delta",
                                         "index": content_index,
-                                        "delta": {"type": "input_json_delta", "partial_json": pending},
+                                        "delta": {
+                                            "type": "input_json_delta",
+                                            "partial_json": pending,
+                                        },
                                     },
                                 )
 
@@ -1433,19 +1746,37 @@ class GatewayHandler(BaseHTTPRequestHandler):
                                 {
                                     "type": "content_block_delta",
                                     "index": tool_blocks[openai_idx]["index"],
-                                    "delta": {"type": "input_json_delta", "partial_json": args_delta},
+                                    "delta": {
+                                        "type": "input_json_delta",
+                                        "partial_json": args_delta,
+                                    },
                                 },
                             )
 
             if text_open and text_index is not None:
-                self._sse("content_block_stop", {"type": "content_block_stop", "index": text_index})
+                self._sse(
+                    "content_block_stop",
+                    {"type": "content_block_stop", "index": text_index},
+                )
 
             for state in sorted(tool_blocks.values(), key=lambda x: x["index"]):
-                self._sse("content_block_stop", {"type": "content_block_stop", "index": state["index"]})
+                self._sse(
+                    "content_block_stop",
+                    {"type": "content_block_stop", "index": state["index"]},
+                )
 
             if not emitted_any_block:
-                self._sse("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}})
-                self._sse("content_block_stop", {"type": "content_block_stop", "index": 0})
+                self._sse(
+                    "content_block_start",
+                    {
+                        "type": "content_block_start",
+                        "index": 0,
+                        "content_block": {"type": "text", "text": ""},
+                    },
+                )
+                self._sse(
+                    "content_block_stop", {"type": "content_block_stop", "index": 0}
+                )
 
             message_delta = {
                 "type": "message_delta",
@@ -1461,7 +1792,13 @@ class GatewayHandler(BaseHTTPRequestHandler):
             )
             self._sse("message_stop", {"type": "message_stop"})
         except Exception:
-            self._sse("error", {"type": "error", "error": {"type": "api_error", "message": traceback.format_exc()}})
+            self._sse(
+                "error",
+                {
+                    "type": "error",
+                    "error": {"type": "api_error", "message": traceback.format_exc()},
+                },
+            )
         finally:
             try:
                 resp.close()
