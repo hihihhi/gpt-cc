@@ -1,8 +1,40 @@
+# Credentials and local environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+credentials.json
+secrets.json
+credentials/
+secrets/
+
+# Python artifacts
 __pycache__/
-*.pyc
-*.pyo
+*.py[cod]
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-.env
+.coverage
+htmlcov/
+
+# Logs
 *.log
+
+# Local data dumps and large generated artifacts
+/data/
+/dumps/
+/private/
+/artifacts/private/
+*.sqlite
+*.db
+*.parquet
+*.zip
+*.7z
+*.tar
+*.gz
+*.bin
