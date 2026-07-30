@@ -12,7 +12,10 @@ class GatewayMappingTests(unittest.TestCase):
             {"id": "gpt-5.5", "created": 3},
             {"id": "text-embedding-3-large", "created": 4},
         ]
-        with patch.object(gw, "OPENAI_MODEL", ""), patch.object(gw, "fetch_openai_models", return_value=models):
+        with (
+            patch.object(gw, "OPENAI_MODEL", ""),
+            patch.object(gw, "fetch_openai_models", return_value=models),
+        ):
             self.assertEqual(gw.resolve_openai_model("claude-sonnet-4-6"), "gpt-5.5")
 
     def test_haiku_resolves_to_latest_mini_model(self):
@@ -21,8 +24,13 @@ class GatewayMappingTests(unittest.TestCase):
             {"id": "gpt-5.4-mini", "created": 2},
             {"id": "gpt-5.4-nano", "created": 3},
         ]
-        with patch.object(gw, "OPENAI_MODEL", ""), patch.object(gw, "fetch_openai_models", return_value=models):
-            self.assertEqual(gw.resolve_openai_model("claude-haiku-4-5"), "gpt-5.4-mini")
+        with (
+            patch.object(gw, "OPENAI_MODEL", ""),
+            patch.object(gw, "fetch_openai_models", return_value=models),
+        ):
+            self.assertEqual(
+                gw.resolve_openai_model("claude-haiku-4-5"), "gpt-5.4-mini"
+            )
 
     def test_openai_model_env_is_exact_override(self):
         with patch.object(gw, "OPENAI_MODEL", "gpt-custom"):
@@ -33,8 +41,13 @@ class GatewayMappingTests(unittest.TestCase):
             {"id": "gpt-5.5", "created": 1},
             {"id": "gpt-5.5-codex", "created": 2},
         ]
-        with patch.object(gw, "OPENAI_MODEL", ""), patch.object(gw, "fetch_openai_models", return_value=models):
-            self.assertEqual(gw.resolve_openai_model("claude-sonnet-4-6"), "gpt-5.5-codex")
+        with (
+            patch.object(gw, "OPENAI_MODEL", ""),
+            patch.object(gw, "fetch_openai_models", return_value=models),
+        ):
+            self.assertEqual(
+                gw.resolve_openai_model("claude-sonnet-4-6"), "gpt-5.5-codex"
+            )
 
     def test_anthropic_tool_use_round_trips_as_openai_tool_call(self):
         messages = gw.anthropic_messages_to_openai(
@@ -79,7 +92,11 @@ class GatewayMappingTests(unittest.TestCase):
                             {"type": "text", "text": "look"},
                             {
                                 "type": "image",
-                                "source": {"type": "base64", "media_type": "image/png", "data": "abc123"},
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": "image/png",
+                                    "data": "abc123",
+                                },
                             },
                         ],
                     }
@@ -88,7 +105,10 @@ class GatewayMappingTests(unittest.TestCase):
         )
         self.assertEqual(messages[0]["content"][0], {"type": "text", "text": "look"})
         self.assertEqual(messages[0]["content"][1]["type"], "image_url")
-        self.assertEqual(messages[0]["content"][1]["image_url"]["url"], "data:image/png;base64,abc123")
+        self.assertEqual(
+            messages[0]["content"][1]["image_url"]["url"],
+            "data:image/png;base64,abc123",
+        )
 
     def test_thinking_maps_to_reasoning_effort(self):
         body = {
@@ -174,17 +194,31 @@ class GatewayMappingTests(unittest.TestCase):
         )
 
     def test_auto_backend_uses_codex_without_api_config(self):
-        with patch.object(gw, "BACKEND_MODE", "auto"), patch.object(gw, "OPENAI_API_KEY", ""), patch.object(gw, "OPENAI_BASE_URL_CONFIGURED", False):
+        with (
+            patch.object(gw, "BACKEND_MODE", "auto"),
+            patch.object(gw, "OPENAI_API_KEY", ""),
+            patch.object(gw, "OPENAI_BASE_URL_CONFIGURED", False),
+        ):
             self.assertEqual(gw.active_backend(), "codex")
 
     def test_auto_backend_uses_openai_with_api_key(self):
-        with patch.object(gw, "BACKEND_MODE", "auto"), patch.object(gw, "OPENAI_API_KEY", "sk-test"), patch.object(gw, "OPENAI_BASE_URL_CONFIGURED", False):
+        with (
+            patch.object(gw, "BACKEND_MODE", "auto"),
+            patch.object(gw, "OPENAI_API_KEY", "sk-test"),
+            patch.object(gw, "OPENAI_BASE_URL_CONFIGURED", False),
+        ):
             self.assertEqual(gw.active_backend(), "openai")
 
     def test_codex_command_prefix_wraps_powershell_script(self):
-        with patch.object(gw, "CODEX_COMMAND", "C:\\Tools\\codex.ps1"), patch.object(gw.shutil, "which", return_value=None):
+        with (
+            patch.object(gw, "CODEX_COMMAND", "C:\\Tools\\codex.ps1"),
+            patch.object(gw.shutil, "which", return_value=None),
+        ):
             prefix = gw.codex_command_prefix()
-        self.assertEqual(prefix[:5], ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File"])
+        self.assertEqual(
+            prefix[:5],
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File"],
+        )
 
     def test_codex_backend_parses_structured_output(self):
         seen_command = []
@@ -193,11 +227,15 @@ class GatewayMappingTests(unittest.TestCase):
             seen_command.extend(command)
             output_path = command[command.index("--output-last-message") + 1]
             with open(output_path, "w", encoding="utf-8") as fh:
-                fh.write('{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}')
+                fh.write(
+                    '{"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn"}'
+                )
             return MagicMock(returncode=0, stderr="", stdout="")
 
         with patch.object(gw.subprocess, "run", side_effect=fake_run):
-            data = gw.run_codex_backend({"messages": [{"role": "user", "content": "hi"}]})
+            data = gw.run_codex_backend(
+                {"messages": [{"role": "user", "content": "hi"}]}
+            )
         self.assertEqual(data["content"][0]["text"], "ok")
         self.assertIn("--ephemeral", seen_command)
         self.assertIn("--ignore-rules", seen_command)
@@ -206,7 +244,13 @@ class GatewayMappingTests(unittest.TestCase):
     def test_codex_response_tool_use_maps_to_anthropic(self):
         response = gw.codex_response_to_anthropic(
             {
-                "content": [{"type": "tool_use", "name": "Read", "input_json": "{\"file_path\":\"README.md\"}"}],
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "name": "Read",
+                        "input_json": '{"file_path":"README.md"}',
+                    }
+                ],
                 "stop_reason": "tool_use",
             },
             "claude-sonnet-4-6",
@@ -230,19 +274,45 @@ class GatewayMappingTests(unittest.TestCase):
             "messages": [
                 {
                     "role": "assistant",
-                    "content": [{"type": "tool_use", "id": "toolu_old", "name": "Read", "input": {"file_path": "a"}}],
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_old",
+                            "name": "Read",
+                            "input": {"file_path": "a"},
+                        }
+                    ],
                 },
                 {
                     "role": "user",
-                    "content": [{"type": "tool_result", "tool_use_id": "toolu_old", "content": "old result"}],
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_old",
+                            "content": "old result",
+                        }
+                    ],
                 },
                 {
                     "role": "assistant",
-                    "content": [{"type": "tool_use", "id": "toolu_new", "name": "Read", "input": {"file_path": "b"}}],
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_new",
+                            "name": "Read",
+                            "input": {"file_path": "b"},
+                        }
+                    ],
                 },
                 {
                     "role": "user",
-                    "content": [{"type": "tool_result", "tool_use_id": "toolu_new", "content": "new result"}],
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_new",
+                            "content": "new result",
+                        }
+                    ],
                 },
             ],
             "context_management": {
@@ -270,19 +340,45 @@ class GatewayMappingTests(unittest.TestCase):
             "messages": [
                 {
                     "role": "assistant",
-                    "content": [{"type": "tool_use", "id": "toolu_old", "name": "Read", "input": {"file_path": "a"}}],
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_old",
+                            "name": "Read",
+                            "input": {"file_path": "a"},
+                        }
+                    ],
                 },
                 {
                     "role": "user",
-                    "content": [{"type": "tool_result", "tool_use_id": "toolu_old", "content": "old result"}],
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_old",
+                            "content": "old result",
+                        }
+                    ],
                 },
                 {
                     "role": "assistant",
-                    "content": [{"type": "tool_use", "id": "toolu_new", "name": "Read", "input": {"file_path": "b"}}],
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_new",
+                            "name": "Read",
+                            "input": {"file_path": "b"},
+                        }
+                    ],
                 },
                 {
                     "role": "user",
-                    "content": [{"type": "tool_result", "tool_use_id": "toolu_new", "content": "new result"}],
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_new",
+                            "content": "new result",
+                        }
+                    ],
                 },
             ],
             "context_management": {
@@ -308,19 +404,45 @@ class GatewayMappingTests(unittest.TestCase):
             "messages": [
                 {
                     "role": "assistant",
-                    "content": [{"type": "tool_use", "id": "toolu_old", "name": "Read", "input": {"file_path": "a"}}],
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_old",
+                            "name": "Read",
+                            "input": {"file_path": "a"},
+                        }
+                    ],
                 },
                 {
                     "role": "user",
-                    "content": [{"type": "tool_result", "tool_use_id": "toolu_old", "content": "old result"}],
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_old",
+                            "content": "old result",
+                        }
+                    ],
                 },
                 {
                     "role": "assistant",
-                    "content": [{"type": "tool_use", "id": "toolu_new", "name": "Write", "input": {"file_path": "b"}}],
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_new",
+                            "name": "Write",
+                            "input": {"file_path": "b"},
+                        }
+                    ],
                 },
                 {
                     "role": "user",
-                    "content": [{"type": "tool_result", "tool_use_id": "toolu_new", "content": "new result"}],
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_new",
+                            "content": "new result",
+                        }
+                    ],
                 },
             ],
             "context_management": {
@@ -357,7 +479,7 @@ class GatewayMappingTests(unittest.TestCase):
                         {"type": "thinking", "thinking": "new reasoning"},
                         {"type": "text", "text": "new visible"},
                     ],
-                }
+                },
             ],
             "context_management": {
                 "edits": [
@@ -380,11 +502,28 @@ class GatewayMappingTests(unittest.TestCase):
         body = {
             "model": "claude-sonnet-4-6",
             "messages": [
-                {"role": "assistant", "content": [{"type": "thinking", "thinking": "old"}, {"type": "text", "text": "a"}]},
-                {"role": "assistant", "content": [{"type": "thinking", "thinking": "new"}, {"type": "text", "text": "b"}]},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "old"},
+                        {"type": "text", "text": "a"},
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "new"},
+                        {"type": "text", "text": "b"},
+                    ],
+                },
             ],
             "context_management": {
-                "edits": [{"type": "clear_thinking_20251015", "keep": {"type": "thinking_turns", "value": 1}}]
+                "edits": [
+                    {
+                        "type": "clear_thinking_20251015",
+                        "keep": {"type": "thinking_turns", "value": 1},
+                    }
+                ]
             },
         }
         managed, _ = gw.apply_context_management(body)
@@ -413,6 +552,29 @@ class GatewayMappingTests(unittest.TestCase):
                     }
                 ]
             )
+
+    def test_message_payload_smoke_uses_requested_content_and_model(self):
+        body = {
+            "model": "claude-sonnet-4-6",
+            "max_tokens": 64,
+            "messages": [{"role": "user", "content": "hello gateway"}],
+        }
+        with patch.object(gw, "OPENAI_MODEL", "gpt-test"):
+            payload = gw.build_openai_payload(body)
+        self.assertEqual(payload["model"], "gpt-test")
+        self.assertEqual(
+            payload["messages"], [{"role": "user", "content": "hello gateway"}]
+        )
+
+    def test_image_without_source_fails_closed_to_text_placeholder(self):
+        part = gw.block_to_openai_content_part({"type": "image"})
+        self.assertEqual(
+            part,
+            {
+                "type": "text",
+                "text": "[image omitted by gateway: unsupported image source]",
+            },
+        )
 
 
 if __name__ == "__main__":

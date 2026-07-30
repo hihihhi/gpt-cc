@@ -1,0 +1,17 @@
+[project]
+name = "gpt-cc"
+version = "0.1.0"
+description = "Local Anthropic-compatible gateway backed by OpenAI-compatible APIs or Codex CLI."
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I", "UP", "PLW1510"]
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "standard"
+exclude = [".git", "__pycache__"]
